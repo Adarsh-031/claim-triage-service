@@ -1,4 +1,4 @@
-"Versioned data contracts (D1). Every external interface validates against these."""
+"""Versioned data contracts (D1). Every external interface validates against these."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -21,6 +21,7 @@ class DisruptionType(StrEnum):
 
 class AlternateFlight(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     offered: bool
     accepted: bool | None = None
     departure_delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
@@ -61,21 +62,22 @@ class ClaimIn(BaseModel):
             raise ValueError("origin and destination must differ")
         if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
-        if self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding) \\
-                and self.delay_minutes:
+        if (
+            self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding)
+            and self.delay_minutes
+        ):
             raise ValueError("delay_minutes does not apply to cancellation or denied_boarding")
         return self
 
 
 class Route(StrEnum):
-    """Stable route values; uppercase aliases match the shared-contract vocabulary."""
+    """Stable route values; aliases preserve current API/worker member names."""
 
     PAY = "pay_as_computed"
     REQUEST_EVIDENCE = "request_further_evidence"
     DECLINE = "decline"
     ESCALATE = "escalate"
 
-    # Backwards-compatible member names already used by the API and worker.
     pay_as_computed = PAY
     request_further_evidence = REQUEST_EVIDENCE
     decline = DECLINE
@@ -83,7 +85,7 @@ class Route(StrEnum):
 
 
 class EscalationReason(StrEnum):
-    CAUSE_DISPUTED = "DISPUTED_CAUSE"
+    CAUSE_DISPUTED = "CAUSE_DISPUTED"
     PROVISION_CONFLICT = "PROVISION_CONFLICT"
     OUT_OF_CORPUS = "OUT_OF_CORPUS"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
@@ -92,7 +94,7 @@ class EscalationReason(StrEnum):
     GUARDRAIL_BLOCKED = "GUARDRAIL_BLOCKED"
     WORKER_FAILURE = "WORKER_FAILURE"
 
-    # Backwards-compatible aliases.
+    # Backwards-compatible member aliases used by the current worker.
     disputed_cause = CAUSE_DISPUTED
     provision_conflict = PROVISION_CONFLICT
     out_of_corpus = OUT_OF_CORPUS
@@ -121,10 +123,11 @@ class Citation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    doc_id: str
     clause_id: str
+    doc_id: str
     quote: str
-    # Optional for compatibility with existing recommendation payloads.
+    # Optional for compatibility with existing result payloads; verified citations
+    # should include this identifier so it can be checked against retrieved chunks.
     chunk_id: str | None = None
 
 
@@ -144,10 +147,22 @@ class Result(BaseModel):
 
 
 class RunState(TypedDict, total=False):
-    """Typed state passed between LangGraph nodes; values are progressively populated."""
+    """Partial state shared by LangGraph nodes; each node fills its own fields."""
 
-    run_id: str
+    # Current graph fields.
     claim: dict[str, object]
+    facts: dict[str, object]
+    retrieved: list[dict[str, object]]
+    draft: dict[str, object] | None
+    verified: bool
+    attempts: int
+    steps: int
+    tool_calls: int
+    trace: list[dict[str, object]]
+    recommendation: dict[str, object]
+
+    # Versioned contract fields used as the graph is expanded.
+    run_id: str
     chunks: list[Chunk]
     citations: list[Citation]
     route: Route
@@ -164,7 +179,7 @@ class Recommendation(BaseModel):
     route: Route
     summary: str
     entitlements: list[str] = Field(default_factory=list)
-    compensation_inr: float | None = None   # computed by code, never by the LLM
+    compensation_inr: float | None = None  # computed by code, never by the LLM
     citations: list[Citation] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
     verified: bool = False
@@ -196,5 +211,6 @@ class SubmitOut(BaseModel):
 
 class FeedbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     agree: bool
     note: str | None = Field(default=None, max_length=2000)
