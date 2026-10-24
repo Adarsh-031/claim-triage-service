@@ -1,5 +1,5 @@
-FROM python:3.11-slim
-COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /uvx /bin/
+FROM python:3.11.17-slim-bookworm
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv PATH="/opt/venv/bin:$PATH"
 WORKDIR /src
 
@@ -8,6 +8,7 @@ COPY pyproject.toml uv.lock ./
 COPY libs/common/pyproject.toml libs/common/
 COPY services/api/pyproject.toml services/api/
 COPY services/worker/pyproject.toml services/worker/
+COPY services/ingest/pyproject.toml services/ingest/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package triage-worker --no-install-workspace
 

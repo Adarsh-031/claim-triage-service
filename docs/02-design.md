@@ -58,11 +58,12 @@ Requirement IDs (F, A, L, D, demo items) refer to `MiniProject_04.pdf`; FR/NFR I
 | `chroma` | Vector index | One shared index for all workers; different resource profile (memory) |
 | `llm-stub` | Fixed responses after a configurable realistic delay | Load tests measure our system, not provider limits (D6) |
 | `web` | Static officer client (nginx) | Independent release of UI |
-| `ingest` | One-shot CLI container (`docker compose run ingest`) | Batch job, not a long-running service |
+| `ingest` | One-shot CLI container that runs automatically before workers; can also be run with `docker compose run --rm ingest` | Fetches and verifies the corpus before worker startup |
 | `jaeger`, `prometheus`, `grafana`, `cadvisor` | Observability | Standard images; per-container resource metrics from cadvisor |
 
 Every long-running service declares a `healthcheck`; `depends_on: condition: service_healthy` orders start-up so
-`docker compose up` works from a clean clone (demo 1). Nothing runs on the host.
+`docker compose up` works from a clean clone (demo 1). The one-shot ingest service fetches and verifies the corpus
+before workers start; run it manually with `docker compose run --rm ingest` when needed. Nothing runs on the host.
 
 ---
 
@@ -178,7 +179,7 @@ Every tool call is a traced span and a `steps` row (input, output size, latency)
 - **Definitions** (CAR Section 2) indexed as their own chunks and linked to terms found in other clauses.
 - IndiGo chunks carry `precedence=airline_terms`, so conflict detection can compare like clauses.
 
-### 6.3 Idempotent pipeline (`docker compose run ingest`)
+### 6.3 Idempotent pipeline (automatic one-shot; also `docker compose run --rm ingest`)
 read → parse (pdfplumber; OCR only if no text layer) → chunk → hash → **embed only chunks whose `chunk_sha`
 changed** → upsert to Chroma by `chunk_id` → delete orphaned chunks → write `corpus_versions` row
 (built_at, doc versions, chunk count, docs/s, chunks/s). Re-running on unchanged files does nothing. Freshness and

@@ -7,3 +7,4 @@ eval:      ; uv run python cli/evaluate.py
 test:      ; uv run pytest -q
 lint:      ; uv run ruff check .
 corpus:    ; uv run python scripts/fetch_corpus.py
+fresh:     ; docker compose down -v && docker compose up --build -d && docker compose ps
