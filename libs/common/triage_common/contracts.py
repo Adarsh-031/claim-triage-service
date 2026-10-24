@@ -1,9 +1,9 @@
-"""Versioned data contracts (D1). Every external interface validates against these."""
+"Versioned data contracts (D1). Every external interface validates against these."""
 from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -61,42 +61,111 @@ class ClaimIn(BaseModel):
             raise ValueError("origin and destination must differ")
         if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
-        if self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding) \
+        if self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding) \\
                 and self.delay_minutes:
             raise ValueError("delay_minutes does not apply to cancellation or denied_boarding")
         return self
 
 
 class Route(StrEnum):
-    pay_as_computed = "pay_as_computed"
-    request_further_evidence = "request_further_evidence"
-    decline = "decline"
-    escalate = "escalate"
+    """Stable route values; uppercase aliases match the shared-contract vocabulary."""
+
+    PAY = "pay_as_computed"
+    REQUEST_EVIDENCE = "request_further_evidence"
+    DECLINE = "decline"
+    ESCALATE = "escalate"
+
+    # Backwards-compatible member names already used by the API and worker.
+    pay_as_computed = PAY
+    request_further_evidence = REQUEST_EVIDENCE
+    decline = DECLINE
+    escalate = ESCALATE
 
 
 class EscalationReason(StrEnum):
-    disputed_cause = "DISPUTED_CAUSE"
-    provision_conflict = "PROVISION_CONFLICT"
-    out_of_corpus = "OUT_OF_CORPUS"
-    verification_failed = "VERIFICATION_FAILED"
-    budget_exhausted = "BUDGET_EXHAUSTED"
-    provider_degraded = "PROVIDER_DEGRADED"
-    guardrail_triggered = "GUARDRAIL_TRIGGERED"
+    CAUSE_DISPUTED = "DISPUTED_CAUSE"
+    PROVISION_CONFLICT = "PROVISION_CONFLICT"
+    OUT_OF_CORPUS = "OUT_OF_CORPUS"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    PROVIDER_DEGRADED = "PROVIDER_DEGRADED"
+    GUARDRAIL_BLOCKED = "GUARDRAIL_BLOCKED"
+    WORKER_FAILURE = "WORKER_FAILURE"
+
+    # Backwards-compatible aliases.
+    disputed_cause = CAUSE_DISPUTED
+    provision_conflict = PROVISION_CONFLICT
+    out_of_corpus = OUT_OF_CORPUS
+    verification_failed = VERIFICATION_FAILED
+    budget_exhausted = BUDGET_EXCEEDED
+    provider_degraded = PROVIDER_DEGRADED
+    guardrail_triggered = GUARDRAIL_BLOCKED
+
+
+class Chunk(BaseModel):
+    """A normalized, traceable passage from one source document."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    clause_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    heading_path: list[str] = Field(default_factory=list)
+    text: str = Field(min_length=1)
+    page: int | None = Field(default=None, ge=1)
+    refs: list[str] = Field(default_factory=list)
+    hash: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
 
 
 class Citation(BaseModel):
-    doc_id: str            # e.g. "CAR-S3-M-IV-R4"
-    clause_id: str         # e.g. "3.3.2"
-    quote: str             # exact retrieved text the claim rests on
-    chunk_id: str          # must resolve to a chunk retrieved in this run
+    """An exact quote supporting a recommendation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str
+    clause_id: str
+    quote: str
+    # Optional for compatibility with existing recommendation payloads.
+    chunk_id: str | None = None
+
+
+class Result(BaseModel):
+    """Stable result contract shared by the agent, API, and client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    route: Route
+    summary: str
+    citations: list[Citation] = Field(default_factory=list)
+    amount: float | None = Field(default=None, ge=0)
+    escalation_reason: EscalationReason | None = None
+    prompt_version: str
+    corpus_version: str
+
+
+class RunState(TypedDict, total=False):
+    """Typed state passed between LangGraph nodes; values are progressively populated."""
+
+    run_id: str
+    claim: dict[str, object]
+    chunks: list[Chunk]
+    citations: list[Citation]
+    route: Route
+    summary: str
+    amount: float | None
+    escalation_reason: EscalationReason | None
+    prompt_version: str
+    corpus_version: str
+    verification_passed: bool
+    errors: list[str]
 
 
 class Recommendation(BaseModel):
     route: Route
     summary: str
-    entitlements: list[str] = []
+    entitlements: list[str] = Field(default_factory=list)
     compensation_inr: float | None = None   # computed by code, never by the LLM
-    citations: list[Citation] = []
+    citations: list[Citation] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
     verified: bool = False
     requires_human_approval: Literal[True] = True
