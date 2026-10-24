@@ -1,3 +1,3 @@
-FROM nginx:1.27-alpine
+FROM nginx:1.27.5-alpine3.21
 COPY services/web/index.html /usr/share/nginx/html/index.html
 COPY eval/scenarios/s01_demo_cancellation_alternate_taken.json /usr/share/nginx/html/demo-claim.json

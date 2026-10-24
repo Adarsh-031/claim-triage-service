@@ -31,17 +31,31 @@ See [the ingestion guide](docs/ingestion.md) for artifact formats, reference res
 Run the stack:
 
 ```bash
-cp .env.example .env          # defaults use the offline LLM stub
-docker compose up --build
+cp .env.example .env
+docker compose up --build -d
+docker compose ps
+curl -i localhost:8000/readyz
 ```
 
-| Service | URL |
-|---|---|
-| Web client | http://localhost:3000 |
-| API docs (Swagger) | http://localhost:8000/docs |
-| Jaeger | http://localhost:16686 |
-| Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3001 (admin / admin) |
+The first startup downloads the DGCA CAR PDF and checks its SHA-256 against the corpus manifest. The one-shot
+`ingest` service completes before the worker starts. In `docker compose ps`, long-running services should be healthy
+and `ingest` should show `Exited (0)`. The readiness request should return HTTP 200.
+
+## Services and ports
+
+| Service | Host port → container port | Access |
+|---|---:|---|
+| Web client (nginx) | 3000 → 80 | http://localhost:3000 |
+| API | 8000 → 8000 | http://localhost:8000/docs |
+| LLM stub | 8001 → 8001 | http://localhost:8001 (health: `/healthz`) |
+| Jaeger UI | 16686 → 16686 | http://localhost:16686; OTLP 4317 is internal |
+| Prometheus | 9090 → 9090 | http://localhost:9090 |
+| Grafana | 3001 → 3000 | http://localhost:3001 (credentials come from `.env`) |
+| PostgreSQL | internal only: 5432 | Compose network |
+| Redis | internal only: 6379 | Compose network |
+| Chroma | internal only: 8000 | Compose network |
+| Worker | no port | Queue consumer; health check verifies Redis and PostgreSQL |
+| Ingest | no port | One-shot corpus fetch/ingest job |
 
 Submit a claim:
 
@@ -52,6 +66,10 @@ curl -s localhost:8000/v1/runs/<run_id> | jq
 ```
 
 Scale workers: `docker compose up --scale worker=3`
+
+PostgreSQL's initialization script runs only when its data volume is empty. To recreate the database from scratch,
+run `docker compose down -v` before starting the stack again. The `.env.example` values are for local development;
+replace them for any shared or deployed environment.
 
 ## Layout
 
