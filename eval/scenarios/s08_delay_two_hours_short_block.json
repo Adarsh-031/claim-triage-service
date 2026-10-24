@@ -6,7 +6,7 @@
     "flight_date": "2026-11-19", "origin": "BLR", "destination": "HYD",
     "block_time_minutes": 120, "disruption_type": "delay", "delay_minutes": 120,
     "reported_at_airport": true, "contact_info_provided": true,
-    "statement": "I checked in on time for a two-hour flight. It was delayed by exactly two hours, and I am asking about meals and refreshments while waiting."
+    "statement": "I checked in on time for a two-hour flight. It was delayed by exactly two hours. I request cash compensation for the delay."
   },
   "expected": {"route": "decline", "must_cite": ["3.4.1", "3.8.1(a)"], "must_include_entitlement": "meals_and_refreshments"}
 }

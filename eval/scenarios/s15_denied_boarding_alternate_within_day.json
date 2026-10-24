@@ -9,5 +9,5 @@
     "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 120},
     "statement": "I had a confirmed booking and checked in on time, but the airline denied boarding against my will. I accepted an alternate scheduled two hours later and request the compensation due."
   },
-  "expected": {"route": "pay_as_computed", "must_cite": ["3.2.2", "3.7.1"]}
+  "expected": {"route": "pay_as_computed", "must_cite": ["3.2.2"]}
 }

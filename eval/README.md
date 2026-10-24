@@ -1,13 +1,13 @@
 # Evaluation set (L3)
 
-The fixed scenario set currently contains 24 JSON cases (`s01`–`s24`). Each holds `claim`,
+The fixed scenario set currently contains 25 JSON cases (`s01`–`s25`). Each holds `claim`,
 `expected.route`, and the clause IDs an answer must rest on. Compensation amounts are deliberately
 left out until the expected answers have been independently reviewed.
 
 | Area | Examples |
 |---|---|
 | Cancellation | Demo alternate; notice under/over two weeks; late notice; missing contact; extraordinary circumstances |
-| Delay | Two-hour short/long block-time thresholds; over-six-hour remedy; overnight and >24-hour hotel facilities |
+| Delay | Two-hour short/long block-time thresholds; exact and over-six-hour remedy boundary; overnight and >24-hour hotel facilities |
 | Denied boarding | Alternate within one hour; alternate within 24 hours; no alternate; signed/unsigned voucher agreement |
 | Downgrade | Domestic involuntary downgrade reimbursement |
 | Escalation | Technical fault vs. IndiGo force-majeure wording; Vietnam route outside corpus |
