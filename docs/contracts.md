@@ -1,13 +1,14 @@
 # Shared data contracts
 
-The shared contracts live in `libs/common/triage_common/contracts.py`. They define the payloads shared by the API, agent graph and web client. The JSON examples below are also stored in `docs/examples/` and validated by `tests/test_contracts.py`.
+The shared contracts live in `libs/common/triage_common/contracts.py`. They define payloads shared by the API, agent graph and web client. JSON examples in `docs/examples/` are validated by `tests/test_contracts.py`.
 
 ## Chunk
 
-A normalized source passage, including document and clause identifiers, heading context, page metadata, cross-references, and a SHA-256 hash of the chunk text.
+A normalized source passage, including a stable `chunk_id`, document and clause identifiers, heading context, page metadata, cross-references, and a SHA-256 hash of the chunk text. The `chunk_id` is the key used to link citations to retrieved passages and must be present.
 
 ```json
 {
+  "chunk_id": "CAR-S3-M-IV-R4:3.3.2:0001",
   "clause_id": "3.3.2",
   "doc_id": "CAR-S3-M-IV-R4",
   "heading_path": ["Section 3", "Compensation", "Cancellation"],
@@ -22,7 +23,7 @@ Example file: [`docs/examples/chunk.json`](examples/chunk.json).
 
 ## Citation
 
-A source quote supporting a result. `chunk_id` is optional for compatibility with existing recommendation payloads, but should be populated when available so verification can resolve the citation to a chunk retrieved in the current run.
+A source quote supporting a result. `chunk_id` is required so the citation can be checked against the source chunk retrieved in the current run.
 
 ```json
 {
@@ -38,6 +39,12 @@ Example file: [`docs/examples/citation.json`](examples/citation.json).
 ## Result
 
 The stable response contract emitted by the reasoning layer. The route is serialized as a plain string. Amounts are computed by code, not by the LLM, and a recommendation must still be reviewed by a human officer.
+
+Route validation rules:
+
+- `ESCALATE` requires `escalation_reason`; every other route forbids it.
+- `PAY` requires an `amount` and at least one citation.
+- `DECLINE` requires at least one citation.
 
 ```json
 {
@@ -63,26 +70,13 @@ Example file: [`docs/examples/result.json`](examples/result.json).
 
 ## RunState
 
-`RunState` is a Python `TypedDict` passed directly to LangGraph. It is partial (`total=False`) because each node populates its own fields as the run progresses. It includes the existing graph state (claim, facts, retrieved passages, draft, verification status, attempts, steps, trace and recommendation) plus fields intended for the expanded workflow.
+`RunState` is a partial `TypedDict` passed to LangGraph. The currently implemented graph still uses `retrieved`, `verified`, and `recommendation`; these remain the authoritative legacy graph fields for now. The contract avoids duplicating them as `chunks`, `verification_passed`, or a parallel set of flattened `Result` fields.
 
-```python
-{
-    "claim": {"pnr": "AB12CD"},
-    "facts": {"disruption_type": "cancellation"},
-    "retrieved": [],
-    "draft": None,
-    "verified": False,
-    "attempts": 0,
-    "steps": 0,
-    "tool_calls": 0,
-    "trace": [],
-    "recommendation": {}
-}
-```
+TODO: migrate graph/API consumers from `Recommendation` to `Result` in a dedicated change. Once all consumers are migrated, replace the legacy `recommendation` field with a single typed result and remove the legacy model only after checking its API compatibility.
 
 ## Enums
 
-- `Route`: member names `PAY`, `REQUEST_EVIDENCE`, `DECLINE`, `ESCALATE`. Their wire values remain `pay_as_computed`, `request_further_evidence`, `decline`, and `escalate` for compatibility with the current API and worker.
+- `Route`: member names `PAY`, `REQUEST_EVIDENCE`, `DECLINE`, `ESCALATE`. Wire values remain `pay_as_computed`, `request_further_evidence`, `decline`, and `escalate` for compatibility with the current API and worker.
 - `EscalationReason`: `CAUSE_DISPUTED`, `PROVISION_CONFLICT`, `OUT_OF_CORPUS`, `VERIFICATION_FAILED`, `BUDGET_EXCEEDED`, `PROVIDER_DEGRADED`, `GUARDRAIL_BLOCKED`, and `WORKER_FAILURE`.
 
-The older route and escalation member names remain aliases for backwards compatibility. Pydantic models reject unknown fields where strict validation matters. Generate the schema for the web client with `Result.model_json_schema()`.
+Older route and escalation member names remain aliases for backwards compatibility. Pydantic models reject unknown fields where strict validation matters. Generate the schema for the web client with `Result.model_json_schema()`.
