@@ -3,7 +3,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-
 APP_PATH = Path(__file__).parents[1] / "services" / "llm-stub" / "app.py"
 SPEC = importlib.util.spec_from_file_location("llm_stub_app", APP_PATH)
 assert SPEC is not None and SPEC.loader is not None
