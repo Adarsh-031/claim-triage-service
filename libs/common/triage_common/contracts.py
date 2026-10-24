@@ -109,6 +109,7 @@ class Chunk(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    chunk_id: str = Field(min_length=1)
     clause_id: str = Field(min_length=1)
     doc_id: str = Field(min_length=1)
     heading_path: list[str] = Field(default_factory=list)
@@ -119,16 +120,14 @@ class Chunk(BaseModel):
 
 
 class Citation(BaseModel):
-    """An exact quote supporting a recommendation."""
+    """An exact quote supporting a recommendation; must resolve to a source chunk."""
 
     model_config = ConfigDict(extra="forbid")
 
     clause_id: str
     doc_id: str
     quote: str
-    # Optional for compatibility with existing result payloads; verified citations
-    # should include this identifier so it can be checked against retrieved chunks.
-    chunk_id: str | None = None
+    chunk_id: str = Field(min_length=1)
 
 
 class Result(BaseModel):
@@ -145,11 +144,28 @@ class Result(BaseModel):
     prompt_version: str
     corpus_version: str
 
+    @model_validator(mode="after")
+    def validate_route_requirements(self) -> Result:
+        if self.route is Route.ESCALATE:
+            if self.escalation_reason is None:
+                raise ValueError("escalation_reason is required when route is ESCALATE")
+        elif self.escalation_reason is not None:
+            raise ValueError("escalation_reason is only allowed when route is ESCALATE")
+
+        if self.route is Route.PAY:
+            if self.amount is None:
+                raise ValueError("amount is required when route is PAY")
+            if not self.citations:
+                raise ValueError("at least one citation is required when route is PAY")
+        elif self.route is Route.DECLINE and not self.citations:
+            raise ValueError("at least one citation is required when route is DECLINE")
+        return self
+
 
 class RunState(TypedDict, total=False):
     """Partial state shared by LangGraph nodes; each node fills its own fields."""
 
-    # Current graph fields.
+    # Existing graph state is authoritative until the graph migrates to Result.
     claim: dict[str, object]
     facts: dict[str, object]
     retrieved: list[dict[str, object]]
@@ -161,17 +177,11 @@ class RunState(TypedDict, total=False):
     trace: list[dict[str, object]]
     recommendation: dict[str, object]
 
-    # Versioned contract fields used as the graph is expanded.
+    # TODO: migrate graph/API consumers from Recommendation to Result, then remove
+    # the legacy recommendation field and move result fields into a single Result.
     run_id: str
-    chunks: list[Chunk]
-    citations: list[Citation]
-    route: Route
-    summary: str
-    amount: float | None
-    escalation_reason: EscalationReason | None
     prompt_version: str
     corpus_version: str
-    verification_passed: bool
     errors: list[str]
 
 
