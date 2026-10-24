@@ -5,7 +5,7 @@ Steps (P0 TODO):
   2. Parse into clause-level chunks (one clause/sub-clause each) with clause_id, parent heading,
      doc_id, revision, page.
   3. Extract cross-references ("para 3.3.1", "sub-para (a)") -> clause graph edges.
-  4. Embed changed chunks only; upsert to Qdrant; write graph + freshness record
+  4. Embed changed chunks only; upsert to Chroma; write graph + freshness record
      (built_at, doc versions, chunk counts) to data/index_meta.json.
 """
 import argparse

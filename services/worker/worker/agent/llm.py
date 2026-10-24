@@ -47,20 +47,17 @@ class CircuitBreaker:
             self.opened_at = now
 
 
-class StubLLM:
-    """Deterministic, offline. Used for dev, eval plumbing and load tests (D6)."""
+class OpenAICompatibleLLM:
+    """HTTP client for an OpenAI-compatible chat-completions endpoint."""
 
-    def chat(self, messages, tools=None):
-        time.sleep(0.05)
-        return {"role": "assistant", "content": "STUB", "tool_calls": [], "usage": {"prompt_tokens": 0,
-                                                                                   "completion_tokens": 0}}
-
-
-class OpenRouterLLM:
-    def __init__(self, model: str):
+    def __init__(self, base_url: str, model: str, api_key: str = ""):
         self.model = model
-        self.client = httpx.Client(base_url=settings.openrouter_base_url, timeout=settings.llm_timeout_s,
-                                   headers={"Authorization": f"Bearer {settings.openrouter_api_key}"})
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self.client = httpx.Client(
+            base_url=base_url,
+            timeout=settings.llm_timeout_s,
+            headers=headers,
+        )
 
     def chat(self, messages, tools=None):
         body = {"model": self.model, "messages": messages}
@@ -69,6 +66,8 @@ class OpenRouterLLM:
         resp = self.client.post("/chat/completions", json=body)
         resp.raise_for_status()
         data = resp.json()
+        # Preserve the same message shape regardless of whether the endpoint is
+        # the local stub or OpenRouter.
         msg = data["choices"][0]["message"]
         msg["usage"] = data.get("usage", {})
         return msg
@@ -102,6 +101,26 @@ class ResilientLLM:
 
 def get_llm() -> LLM:
     if settings.llm_provider == "stub":
-        return StubLLM()
-    fallback = OpenRouterLLM(settings.llm_model_fallback) if settings.llm_model_fallback else None
-    return ResilientLLM(OpenRouterLLM(settings.llm_model_primary), fallback)
+        # The default is a local HTTP service, so callers exercise the same
+        # OpenAI-compatible request/response path as a real provider.
+        return OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model_primary or "stub")
+
+    if settings.llm_provider != "openrouter":
+        raise ValueError("LLM_PROVIDER must be 'stub' or 'openrouter'")
+    if not settings.openrouter_api_key:
+        raise ValueError("OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter")
+    fallback = (
+        OpenAICompatibleLLM(
+            settings.openrouter_base_url,
+            settings.llm_model_fallback,
+            settings.openrouter_api_key,
+        )
+        if settings.llm_model_fallback
+        else None
+    )
+    primary = OpenAICompatibleLLM(
+        settings.openrouter_base_url,
+        settings.llm_model_primary,
+        settings.openrouter_api_key,
+    )
+    return ResilientLLM(primary, fallback)

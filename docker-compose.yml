@@ -22,7 +22,8 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      qdrant: { condition: service_started }
+      chroma: { condition: service_healthy }
+      llm-stub: { condition: service_healthy }
 
   web:
     build: { context: ., dockerfile: services/web/Dockerfile }
@@ -39,9 +40,25 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U triage"], interval: 5s, retries: 10 }
 
-  qdrant:
-    image: qdrant/qdrant:v1.11.0
-    volumes: [qdrant:/qdrant/storage]
+  chroma:
+    image: chromadb/chroma:1.5.3
+    volumes: [chroma:/data]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 || exit 1; printf 'GET /api/v2/heartbeat HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; IFS= read -r -t 3 response <&3; [[ \"$$response\" == *\"200 OK\"* ]]"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  llm-stub:
+    build: { context: ., dockerfile: services/llm-stub/Dockerfile }
+    environment:
+      STUB_DELAY: ${STUB_DELAY:-1.5}
+    ports: ["8001:8001"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   jaeger:
     image: jaegertracing/all-in-one:1.60
@@ -59,4 +76,4 @@ services:
 
 volumes:
   pgdata:
-  qdrant:
+  chroma:
