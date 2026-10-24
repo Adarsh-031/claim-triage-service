@@ -166,8 +166,10 @@ Every tool call is a traced span and a `steps` row (input, output size, latency)
 (`CAR=binding_floor`, `INDIGO=airline_terms`), jurisdiction.
 
 ### 6.2 Chunking strategy (answers brief §3 "amounts are easy, conditions are hard")
-- **One chunk per clause** at the deepest numbered level (e.g. `3.3.2(a)`), never split mid-clause; long clauses
-  split at sentence boundaries with the clause header repeated.
+- **One complete chunk per numbered clause**, including `3.3.2`, without sentence or token splitting.
+  CAR lettered subclauses also have addressable child views (e.g. `3.8.1(a)`); their text overlaps the parent.
+  This preserves the whole compensation rule while allowing precise reference targets. See
+  [ingestion](ingestion.md) for the implemented export format.
 - **Contextual header** prepended before embedding: `CAR Rev4 > 3 Requirements > 3.3 Cancellation > 3.3.2`. Keeps
   "compensation amounts" chunks semantically tied to their conditions.
 - **Metadata:** `doc_id, clause_id, parent_id, heading_path, refs_out[], defined_terms[], precedence, version, chunk_sha`.
