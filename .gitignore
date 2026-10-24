@@ -8,3 +8,5 @@ data/
 *.log
 build/
 *.egg-info/
+.env
+.env.example
