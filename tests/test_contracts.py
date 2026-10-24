@@ -6,8 +6,8 @@ import pytest
 from pydantic import ValidationError
 from triage_common.contracts import (
     Chunk,
-    ClaimIn,
     Citation,
+    ClaimIn,
     EscalationReason,
     Result,
     Route,
