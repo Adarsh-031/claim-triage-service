@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Claim Triage – Officer Console</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;background:#f8fafc;color:#111}
+header{background:#e2e8f0;padding:12px 20px;font-weight:600}
+main{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px}
+section{background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:16px}
+label{display:block;font-size:13px;color:#475569;margin-top:8px}
+input,select,textarea{width:100%;padding:6px;box-sizing:border-box}
+button{margin-top:12px;padding:8px 16px;background:#1a56db;color:#fff;border:0;border-radius:6px;cursor:pointer}
+.rec{background:#fef3c7;border:1px solid #b45309;padding:10px;border-radius:6px;font-weight:600}
+.cite{border:1px solid #1a56db;background:#e8f0fe;padding:6px;margin:6px 0;border-radius:4px;cursor:pointer}
+.err{color:#b91c1c;font-size:13px}
+pre{white-space:pre-wrap;font-size:12px}
+</style></head><body>
+<header>Claim Triage – officer console (recommendations only; a human makes the final decision)</header>
+<main>
+<section><h3>1. New claim</h3>
+<form id="f">
+<label>PNR<input name="pnr" value="ABC123"></label>
+<label>Airline code<input name="airline_code" value="6E"></label>
+<label>Flight number<input name="flight_number" value="6E512"></label>
+<label>Flight date<input name="flight_date" type="date" value="2026-10-14"></label>
+<label>Origin<input name="origin" value="BLR"></label>
+<label>Destination<input name="destination" value="DEL"></label>
+<label>Block time (min)<input name="block_time_minutes" type="number" value="165"></label>
+<label>Disruption type<select name="disruption_type">
+<option>cancellation</option><option>delay</option><option>denied_boarding</option><option>downgrade</option><option>unknown</option></select></label>
+<label>Notice (min before departure)<input name="notice_minutes_before_departure" type="number" value="90"></label>
+<label>Passenger statement<textarea name="statement" rows="5">My flight was cancelled. I was already at the airport and was told 90 minutes before departure. The airline put me on a flight four hours later, which I took. I want the compensation for cancellation.</textarea></label>
+<button>Submit claim</button><div id="errors" class="err"></div>
+</form></section>
+<section><h3>2. Result</h3><div id="out">No run yet.</div></section>
+</main>
+<script>
+const API = location.protocol + "//" + location.hostname + ":8000";
+const f = document.getElementById("f"), out = document.getElementById("out"), errs = document.getElementById("errors");
+f.onsubmit = async (e) => {
+  e.preventDefault(); errs.textContent = "";
+  const d = Object.fromEntries(new FormData(f));
+  for (const k of ["block_time_minutes","notice_minutes_before_departure"]) d[k] = d[k] ? Number(d[k]) : null;
+  const r = await fetch(API + "/v1/claims", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(d)});
+  const j = await r.json();
+  if (!r.ok) { errs.innerHTML = (j.errors||[]).map(x => `${x.field}: ${x.msg}`).join("<br>") || JSON.stringify(j); return; }
+  out.textContent = "Queued " + j.run_id + "…"; poll(j.run_id);
+};
+async function poll(id) {
+  const j = await (await fetch(API + "/v1/runs/" + id)).json();
+  if (["queued","running"].includes(j.status)) return setTimeout(() => poll(id), 1000);
+  const r = j.result || {};
+  out.innerHTML = `<p>run ${id} · <b>${j.status}</b></p>
+   <div class="rec">${(r.route||"").toUpperCase()} – ${r.summary||j.error||""}</div>
+   ${r.escalation_reason ? `<p>Escalation reason: <b>${r.escalation_reason}</b></p>` : ""}
+   <h4>Citations</h4>${(r.citations||[]).map(c => `<div class="cite" title="${c.quote}">${c.doc_id} ${c.clause_id}</div>`).join("") || "<p>none</p>"}
+   <p><a href="${API}/v1/runs/${id}/trace" target="_blank">View trace</a></p>`;
+}
+</script></body></html>

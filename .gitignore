@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+corpus/raw/*.pdf
+data/
+*.log
+build/
+*.egg-info/

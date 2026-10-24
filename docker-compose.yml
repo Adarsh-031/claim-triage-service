@@ -1,0 +1,62 @@
+name: claim-triage
+
+x-app-env: &app-env
+  env_file: .env
+
+services:
+  api:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    <<: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      retries: 5
+
+  worker:
+    build: { context: ., dockerfile: services/worker/Dockerfile }
+    <<: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      qdrant: { condition: service_started }
+
+  web:
+    build: { context: ., dockerfile: services/web/Dockerfile }
+    ports: ["3000:80"]
+    depends_on: [api]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: triage, POSTGRES_PASSWORD: triage, POSTGRES_DB: triage }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U triage"], interval: 5s, retries: 10 }
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    volumes: [qdrant:/qdrant/storage]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    ports: ["16686:16686"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    volumes: ["./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports: ["3001:3000"]
+    volumes: ["./deploy/grafana/provisioning:/etc/grafana/provisioning:ro"]
+
+volumes:
+  pgdata:
+  qdrant:

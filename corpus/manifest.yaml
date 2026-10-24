@@ -1,0 +1,14 @@
+# Source of truth for the corpus (L1). ingest.py hashes each file; unchanged files are skipped.
+documents:
+  - doc_id: CAR-S3-M-IV-R4
+    title: "DGCA CAR Section 3, Series M, Part IV - Facilities to be provided to passengers by airlines due to denied boarding, cancellation of flights and delays in flights"
+    revision: "Rev 4"
+    effective: "2023-02-15"
+    source: "https://www.dgca.gov.in (download the PDF into corpus/raw/)"
+    file: raw/car-s3-m-iv-r4.pdf
+    precedence: regulatory_floor
+  - doc_id: AIRLINE-COC
+    title: "Airline Conditions of Carriage (airline TBC: IndiGo proposed)"
+    source: "https://www.goindigo.in/information/conditions-of-carriage.html"
+    file: raw/airline-coc.html
+    precedence: may_add_not_reduce

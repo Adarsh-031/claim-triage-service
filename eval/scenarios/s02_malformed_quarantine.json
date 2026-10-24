@@ -1,0 +1,7 @@
+{
+  "id": "s02_malformed_quarantine",
+  "description": "Invalid PNR and origin == destination -> 422 + quarantine, no run created.",
+  "claim": {"pnr": "x", "airline_code": "6E", "flight_number": "6E512", "flight_date": "2026-10-14",
+            "origin": "BLR", "destination": "BLR", "statement": "Flight was bad, pay me."},
+  "expected": {"route": "quarantined"}
+}
