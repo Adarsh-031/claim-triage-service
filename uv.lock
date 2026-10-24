@@ -403,6 +403,7 @@ dev = [
     { name = "httpx" },
     { name = "locust" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -418,6 +419,7 @@ dev = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "locust", specifier = ">=2.31" },
     { name = "pytest", specifier = ">=8" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = ">=0.6" },
 ]
 
