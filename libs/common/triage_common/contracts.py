@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,6 +21,7 @@ class DisruptionType(StrEnum):
 
 class AlternateFlight(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     offered: bool
     accepted: bool | None = None
     departure_delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
@@ -61,42 +62,135 @@ class ClaimIn(BaseModel):
             raise ValueError("origin and destination must differ")
         if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
-        if self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding) \
-                and self.delay_minutes:
+        if (
+            self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding)
+            and self.delay_minutes
+        ):
             raise ValueError("delay_minutes does not apply to cancellation or denied_boarding")
         return self
 
 
 class Route(StrEnum):
-    pay_as_computed = "pay_as_computed"
-    request_further_evidence = "request_further_evidence"
-    decline = "decline"
-    escalate = "escalate"
+    """Stable route values; aliases preserve current API/worker member names."""
+
+    PAY = "pay_as_computed"
+    REQUEST_EVIDENCE = "request_further_evidence"
+    DECLINE = "decline"
+    ESCALATE = "escalate"
+
+    pay_as_computed = PAY
+    request_further_evidence = REQUEST_EVIDENCE
+    decline = DECLINE
+    escalate = ESCALATE
 
 
 class EscalationReason(StrEnum):
-    disputed_cause = "DISPUTED_CAUSE"
-    provision_conflict = "PROVISION_CONFLICT"
-    out_of_corpus = "OUT_OF_CORPUS"
-    verification_failed = "VERIFICATION_FAILED"
-    budget_exhausted = "BUDGET_EXHAUSTED"
-    provider_degraded = "PROVIDER_DEGRADED"
-    guardrail_triggered = "GUARDRAIL_TRIGGERED"
+    CAUSE_DISPUTED = "CAUSE_DISPUTED"
+    PROVISION_CONFLICT = "PROVISION_CONFLICT"
+    OUT_OF_CORPUS = "OUT_OF_CORPUS"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    PROVIDER_DEGRADED = "PROVIDER_DEGRADED"
+    GUARDRAIL_BLOCKED = "GUARDRAIL_BLOCKED"
+    WORKER_FAILURE = "WORKER_FAILURE"
+
+    # Backwards-compatible member aliases used by the current worker.
+    disputed_cause = CAUSE_DISPUTED
+    provision_conflict = PROVISION_CONFLICT
+    out_of_corpus = OUT_OF_CORPUS
+    verification_failed = VERIFICATION_FAILED
+    budget_exhausted = BUDGET_EXCEEDED
+    provider_degraded = PROVIDER_DEGRADED
+    guardrail_triggered = GUARDRAIL_BLOCKED
+
+
+class Chunk(BaseModel):
+    """A normalized, traceable passage from one source document."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    chunk_id: str = Field(min_length=1)
+    clause_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    heading_path: list[str] = Field(default_factory=list)
+    text: str = Field(min_length=1)
+    page: int | None = Field(default=None, ge=1)
+    refs: list[str] = Field(default_factory=list)
+    hash: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
 
 
 class Citation(BaseModel):
-    doc_id: str            # e.g. "CAR-S3-M-IV-R4"
-    clause_id: str         # e.g. "3.3.2"
-    quote: str             # exact retrieved text the claim rests on
-    chunk_id: str          # must resolve to a chunk retrieved in this run
+    """An exact quote supporting a recommendation; must resolve to a source chunk."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clause_id: str
+    doc_id: str
+    quote: str
+    chunk_id: str = Field(min_length=1)
+
+
+class Result(BaseModel):
+    """Stable result contract shared by the agent, API, and client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    route: Route
+    summary: str
+    citations: list[Citation] = Field(default_factory=list)
+    amount: float | None = Field(default=None, ge=0)
+    escalation_reason: EscalationReason | None = None
+    prompt_version: str
+    corpus_version: str
+
+    @model_validator(mode="after")
+    def validate_route_requirements(self) -> Result:
+        if self.route is Route.ESCALATE:
+            if self.escalation_reason is None:
+                raise ValueError("escalation_reason is required when route is ESCALATE")
+        elif self.escalation_reason is not None:
+            raise ValueError("escalation_reason is only allowed when route is ESCALATE")
+
+        if self.route is Route.PAY:
+            if self.amount is None:
+                raise ValueError("amount is required when route is PAY")
+            if not self.citations:
+                raise ValueError("at least one citation is required when route is PAY")
+        elif self.route is Route.DECLINE and not self.citations:
+            raise ValueError("at least one citation is required when route is DECLINE")
+        return self
+
+
+class RunState(TypedDict, total=False):
+    """Partial state shared by LangGraph nodes; each node fills its own fields."""
+
+    # Existing graph state is authoritative until the graph migrates to Result.
+    claim: dict[str, object]
+    facts: dict[str, object]
+    retrieved: list[dict[str, object]]
+    draft: dict[str, object] | None
+    verified: bool
+    attempts: int
+    steps: int
+    tool_calls: int
+    trace: list[dict[str, object]]
+    recommendation: dict[str, object]
+
+    # TODO: migrate graph/API consumers from Recommendation to Result, then remove
+    # the legacy recommendation field and move result fields into a single Result.
+    run_id: str
+    prompt_version: str
+    corpus_version: str
+    errors: list[str]
 
 
 class Recommendation(BaseModel):
     route: Route
     summary: str
-    entitlements: list[str] = []
-    compensation_inr: float | None = None   # computed by code, never by the LLM
-    citations: list[Citation] = []
+    entitlements: list[str] = Field(default_factory=list)
+    compensation_inr: float | None = None  # computed by code, never by the LLM
+    citations: list[Citation] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
     verified: bool = False
     requires_human_approval: Literal[True] = True
@@ -127,5 +221,6 @@ class SubmitOut(BaseModel):
 
 class FeedbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     agree: bool
     note: str | None = Field(default=None, max_length=2000)
