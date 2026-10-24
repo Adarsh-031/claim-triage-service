@@ -9,6 +9,9 @@ Steps (P0 TODO):
      (built_at, doc versions, chunk counts) to data/index_meta.json.
 """
 import argparse
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -16,7 +19,8 @@ def main() -> None:
     p.add_argument("--manifest", default="corpus/manifest.yaml")
     p.add_argument("--force", action="store_true", help="rebuild even if hashes are unchanged")
     p.parse_args()
-    raise SystemExit("ingest: not implemented yet (P0)")
+    log.warning("ingest not implemented yet (#9); skipping")
+    return
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = ["triage-common", "triage-api", "triage-worker"]
 
 [tool.uv.workspace]
-members = ["libs/common", "services/api", "services/worker"]
+members = ["libs/common", "services/api", "services/worker", "services/ingest"]
 
 [tool.uv.sources]
 triage-common = { workspace = true }
