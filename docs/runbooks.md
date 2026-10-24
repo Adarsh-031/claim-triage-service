@@ -57,18 +57,29 @@ Compose's Chroma health check calls its heartbeat endpoint. A healthy heartbeat
 confirms the server is reachable; it does **not** confirm that a collection is
 populated.
 
-**Fix:** If the container is unhealthy, start it again and check its logs:
+**Fix:** If Chroma is running but unhealthy, restart it:
+
+```bash
+docker compose restart chroma
+```
+
+If it is stopped, start it instead:
 
 ```bash
 docker compose up -d chroma
+```
+
+Then inspect its logs:
+
+```bash
 docker compose logs --tail=100 chroma
 ```
 
 If the collection is empty, there is no supported indexing repair command yet.
 `make ingest` creates clause chunks and sidecar files under `corpus/processed/`; it
-does not embed or write those chunks to Chroma. **TODO: implement and track Chroma
-indexing with the retrieval work in issue #6.** Do not treat a healthy heartbeat or
-successful chunk generation as proof that retrieval is ready.
+does not embed or write those chunks to Chroma. **TODO: implement Chroma indexing and
+retrieval verification in issue #21.** Do not treat a healthy heartbeat or successful
+chunk generation as proof that retrieval is ready.
 
 **Verify:** For an availability problem, `docker compose ps chroma` should show
 `healthy`, and worker logs should stop reporting Chroma connection errors. For an
@@ -89,12 +100,28 @@ docker compose exec redis redis-cli LLEN triage:runs
 The queue command reports waiting jobs; a job currently being processed is not in
 that list.
 
-**Fix:** If Redis is unhealthy, restart it and its dependent services. If workers are
-crashed or saturated, inspect their logs and add worker capacity:
+**Fix:** Choose the recovery action that matches the confirmed cause. If Redis is
+unhealthy, restart Redis and wait for its health check before taking further action:
 
 ```bash
-docker compose restart redis api worker
+docker compose restart redis
+docker compose ps redis
+```
+
+If Redis is healthy and workers are saturated, add worker capacity without restarting
+the existing workers:
+
+```bash
 docker compose up -d --scale worker=3
+```
+
+If a worker has exited, inspect the affected run IDs before restarting it. The worker
+removes a job from Redis before processing and does not requeue it after a crash, so
+restarting can leave that run stuck and will not recover its job automatically.
+Restart only the stopped worker after recording affected runs:
+
+```bash
+docker compose restart worker
 ```
 
 Do not delete or flush the Redis queue as a backlog fix.
@@ -165,7 +192,7 @@ make ingest
 If a hash mismatch persists, stop and compare the source with `corpus/manifest.yaml`;
 do not change the expected hash just to bypass verification. Re-ingestion currently
 rebuilds chunk files only and does not populate Chroma (see the Chroma runbook and
-issue #6).
+issue #21).
 
 **Verify:** The job exits successfully and reports its chunk count. In Compose,
 `docker compose ps -a ingest` should show `Exited (0)`; locally, confirm the three
@@ -173,9 +200,12 @@ processed files exist. This verifies corpus parsing/export, not vector indexing.
 
 ## Observability tooling limits
 
-- **TODO, issue #6:** Agent-level Grafana dashboards are not provisioned. The Grafana
+- **TODO, issue #21:** Agent-level Grafana dashboards are not provisioned. The Grafana
   container being healthy does not mean the planned agent dashboard exists.
-- **TODO, issue #6:** Jaeger is present in Compose, but the current API/worker code
-  does not emit OpenTelemetry spans. Use worker logs and `GET /v1/runs/{run_id}/trace`
-  for the currently implemented run trace; the Jaeger UI being available does not
-  confirm application traces are arriving.
+- **TODO, issue #21:** Jaeger is present in Compose, but the current API/worker code
+  does not emit OpenTelemetry spans. Use worker logs and
+  `GET /v1/runs/{run_id}/trace` for the currently implemented run trace; the Jaeger UI
+  being available does not confirm application traces are arriving.
+
+Issue #6 tracks the agent graph and pass-through verifier only. Issue #21 tracks Chroma
+indexing, Grafana dashboards, and Jaeger instrumentation.

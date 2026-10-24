@@ -30,7 +30,9 @@ See [the ingestion guide](docs/ingestion.md) for artifact formats, reference res
 
 For production-like troubleshooting, see the [operational runbooks](docs/runbooks.md) and
 [incident log](docs/incident-log.md). The runbooks call out features that are not implemented yet,
-including Chroma indexing and the separate verifier worker.
+including Chroma indexing and the separate verifier worker (tracked in
+[issue #21](https://github.com/Adarsh-031/claim-triage-service/issues/21) and
+[issue #6](https://github.com/Adarsh-031/claim-triage-service/issues/6), respectively).
 
 Run the stack:
 
