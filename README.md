@@ -19,6 +19,15 @@ uv run pytest      # tests
 uv add --package triage-worker <pkg>   # add a dependency to one service
 ```
 
+Build the clause corpus (requires Poppler's `pdftotext`, e.g. `sudo apt install poppler-utils`):
+
+```bash
+make corpus        # download/verify the manifest-pinned sources
+make ingest        # write corpus/processed/{chunks.jsonl,refs.json,definitions.json}
+```
+
+See [the ingestion guide](docs/ingestion.md) for artifact formats, reference resolution, and tests.
+
 Run the stack:
 
 ```bash
@@ -81,7 +90,7 @@ docs/              Requirements, design, report material, runbooks, incident log
 | Priority | Item | State |
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
-| P0 | CAR ingestion + clause graph | TODO |
+| P0 | Clause chunks + reference/definition exports | implemented; embedding/indexing pending |
 | P0 | Agent with retrieval tools, demo case 4.1 | TODO |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
 | P2 | Dashboards, Locust/scaling study, caching study, prompt A/B, runbooks | TODO |

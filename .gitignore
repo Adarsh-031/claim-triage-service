@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 corpus/raw/*.pdf
+corpus/processed/*.json
+corpus/processed/*.jsonl
+corpus/processed/*.tmp
 data/
 *.log
 build/
