@@ -190,8 +190,8 @@ throughput exposed as Prometheus gauges.
 ## 7. Precedence and escalation rules (F6, F7)
 
 - **CAR is the floor.** IndiGo terms may add entitlements, never reduce them.
-- Airline clause less generous than CAR on the same point → **escalate `PROVISION_CONFLICT`** with both citations
-  (e.g. stated cause "technical snag": IndiGo treats it as force majeure, CAR 1.4/1.5 do not list it).
+- Airline clause less generous than CAR on the same point → **escalate `PROVISION_CONFLICT`** with both citations.
+- A technical-snag label alone does not establish Force Majeure: IndiGo's CoC names technical failures, while CAR 1.4/1.5 use broad beyond-control language and require that reasonable measures could not avoid the event. Request evidence that applies these shared conditions; use `CAUSE_DISPUTED` if evidence about the cause or avoidability conflicts.
 - Stated cause disputed or unverifiable and it decides compensation → `CAUSE_DISPUTED`.
 - Route outside the corpus (foreign carrier, IndiGo Vietnam-jurisdiction flights, diversion) → `OUT_OF_CORPUS`.
 - Missing a fact the checklist needs (e.g. contact details given?) → `request_further_evidence`, naming it.

@@ -47,11 +47,11 @@
 
 ## 6. Decisions
 - LLM: OpenRouter free model (user, Oct 20 2026). Implications: free-model daily request cap (low unless $10 credits bought), so stub LLM for dev/tests/load, aggressive caching, a second free model as fallback in the breaker chain. Model must support tool calling.
-- Airline: undecided. Recommended IndiGo: its Conditions of Carriage list "mechanical, technical, operational issues" and "shortage of manpower/parts" as beyond its control, while CAR 1.4/1.5 doesn't, giving a real CAR-vs-charter conflict to demo PROVISION_CONFLICT escalation. Alternative Air India (CoC PDF + passenger charter PDF, but charter mostly duplicates CAR text).
+- Airline: undecided. Recommended IndiGo: its Conditions of Carriage explicitly lists mechanical, technical and operational issues, while CAR 1.4/1.5 describes extraordinary circumstances with broad beyond-control language. A technical-snag label alone does not prove a provision conflict: both sources require an event beyond the airline's control that could not have been avoided with reasonable care/measures. Request supporting evidence and escalate disputed facts rather than assuming the label controls. Alternative Air India (CoC PDF + passenger charter PDF, but charter mostly duplicates CAR text).
 - Team split: pending.
 
 ## 7. IndiGo CoC findings (Oct 20 2026, goindigo.in/information/conditions-of-carriage.html)
-- Conflict 1: IndiGo Force Majeure includes manpower/parts shortage and mechanical/technical/operational failures; CAR 1.4/1.5 don't list technical faults -> escalate PROVISION_CONFLICT on "technical snag" claims.
+- Force Majeure evidence case: IndiGo Force Majeure expressly lists manpower/parts shortage and mechanical/technical/operational failures. CAR 1.4/1.5 do not name technical faults in their examples, but include broad beyond-control language and the same reasonable-measures test. A bare "technical snag" assertion therefore needs evidence; it is not by itself a `PROVISION_CONFLICT`.
 - Conflict 2: CoC 10.2(c) pays denied-boarding compensation as non-encashable vouchers; CAR 3.7.1 allows vouchers only with signed passenger agreement.
 - Agreements: contact-info exclusion (CAR 3.3.3); denied boarding 1h rule (3.2.2) and connecting 3h rule (3.2.3) copied in 10.2.
 - CoC has a Vietnam-specific section (Decree 208/2026/ND-CP) -> out-of-jurisdiction escalation test.

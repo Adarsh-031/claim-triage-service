@@ -1,0 +1,13 @@
+{
+  "id": "s21_cancel_technical_fault_evidence",
+  "description": "An airline labels a technical snag Force Majeure, but the record does not establish that it was beyond the airline's control and unavoidable despite reasonable measures.",
+  "claim": {
+    "pnr": "CA021A", "airline_code": "6E", "flight_number": "6E121",
+    "flight_date": "2026-12-02", "origin": "BOM", "destination": "BLR",
+    "block_time_minutes": 100, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 60, "reported_at_airport": true,
+    "contact_info_provided": true, "stated_cause": "technical snag",
+    "statement": "The airline cancelled my flight because of a technical snag and denied cancellation compensation under its Force Majeure clause. The notice does not explain whether the fault was beyond the airline's control or unavoidable despite reasonable measures. I checked in and request the statutory cancellation remedy."
+  },
+  "expected": {"route": "request_further_evidence", "must_cite": ["1.1", "1.4", "1.5", "3.3.4"], "must_include_entitlement": "evidence whether the technical fault was beyond the airline's control and could not have been avoided despite reasonable measures"}
+}

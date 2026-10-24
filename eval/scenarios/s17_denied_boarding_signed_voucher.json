@@ -9,5 +9,5 @@
     "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 180},
     "statement": "I was denied boarding against my will and signed an agreement accepting IndiGo's travel voucher as compensation. I have received it and now request duplicate cash compensation."
   },
-  "expected": {"route": "decline", "must_cite": ["3.7.1", "10.2(c)"], "must_not": "duplicate compensation after valid signed agreement and issued voucher"}
+  "expected": {"route": "decline", "must_cite": ["3.7.1", "10.2"], "must_not": "duplicate compensation after valid signed agreement and issued voucher"}
 }

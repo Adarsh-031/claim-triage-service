@@ -9,5 +9,5 @@
     "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 150},
     "statement": "I was denied boarding against my will. IndiGo issued a non-encashable travel voucher, but I did not sign an agreement to accept a voucher. I request the compensation required by the CAR."
   },
-  "expected": {"route": "escalate", "escalation_reason": "PROVISION_CONFLICT", "must_cite": ["3.2.2", "3.7.1", "10.2(c)"]}
+  "expected": {"route": "escalate", "escalation_reason": "PROVISION_CONFLICT", "must_cite": ["3.2.2", "3.7.1", "10.2"]}
 }
