@@ -209,3 +209,160 @@ def test_real_pdf_matches_layout_fixture():
         "pdftotext", "-layout", str(ROOT / "corpus/raw/car-s3-m-iv-r4.pdf"), "-",
     ], encoding="utf-8")
     assert [chunk.model_dump() for chunk in parse_car(text)] == [chunk.model_dump() for chunk in parse_car(LAYOUT)]
+
+
+@pytest.mark.parametrize(("first", "second", "suffix"), [
+    ("a)", "b)", "a"),
+    ("(a)", "(b)", "a"),
+    ("a.", "b.", "a"),
+    ("(A)", "(B)", "a"),
+    ("1)", "2)", "1"),
+    ("(1)", "(2)", "1"),
+])
+@pytest.mark.parametrize("indent", ["", "    ", "\t", "             "])
+def test_car_subclause_marker_formats_and_indentation(first, second, suffix, indent):
+    text = (f"3.8.0 See Para 3.8.1({suffix}).\n3.8.1 Facilities\n"
+            f"{indent}{first} Meals and refreshments.\n{indent}{second} Hotel accommodation.")
+    chunks = {chunk.clause_id: chunk for chunk in parse_car(text)}
+    assert chunks[f"3.8.1({suffix})"].text.endswith("Meals and refreshments.")
+    assert "Hotel accommodation" not in chunks[f"3.8.1({suffix})"].text
+    assert "Hotel accommodation" in chunks["3.8.1"].text
+    assert reference_graph(list(chunks.values()))["unresolved"] == {}
+
+
+def test_nested_subclauses_keep_context_in_parent_graph():
+    text = """3.8.1 Facilities
+    (a) Main provision.
+        (i) First option.
+        ii) Second option; see sub-para (i) and sub-para (b).
+    b. Other provision.
+3.8.2 Next provision.
+"""
+    chunks = {chunk.clause_id: chunk for chunk in parse_car(text)}
+    assert "3.8.1(a)(i)" in chunks
+    assert "3.8.1(a)(ii)" in chunks
+    expected = ["3.8.1(a)(i)", "3.8.1(b)"]
+    assert chunks["3.8.1(a)(ii)"].refs == expected
+    assert chunks["3.8.1(a)"].refs == expected
+    assert chunks["3.8.1"].refs == expected
+    assert "Other provision" not in chunks["3.8.1(a)"].text
+    assert chunks["3.8.1(a)(ii)"].heading_path[-2:] == ["3.8.1(a)", "3.8.1(a)(ii)"]
+    graph = reference_graph(list(chunks.values()))
+    assert graph["unresolved"] == {}
+    assert f"{CAR_DOC}:3.8.1(a)(i)" in graph["refs"][f"{CAR_DOC}:3.8.1"]
+
+
+def test_nested_subclause_across_page_and_wrapped_reference():
+    text = """3.8.1 Facilities
+    (a) Options:
+        (i) First.
+        (ii) Second; see sub-para
+\fCIVIL AVIATION REQUIREMENTS SECTION 3
+             (i) above.
+        (iii) Third option.
+    (b) Third.
+"""
+    chunks = {chunk.clause_id: chunk for chunk in parse_car(text)}
+    assert "3.8.1(a)(ii)(i)" not in chunks
+    assert chunks["3.8.1(a)(ii)"].refs == ["3.8.1(a)(i)"]
+    assert chunks["3.8.1(a)(iii)"].page == 2
+
+
+@pytest.mark.parametrize(("context", "relative", "target"), [
+    ("3.4.1", "(a)", "3.4.1(a)"),
+    ("3.4.1(c)", "(a)", "3.4.1(a)"),
+    ("3.4.1(c)", "(i)", "3.4.1(c)(i)"),
+    ("3.4.1(c)(ii)", "(i)", "3.4.1(c)(i)"),
+    ("3.4.1(c)(ii)", "(a)", "3.4.1(a)"),
+    ("3.4.1(a)(ii)", "(c)", "3.4.1(c)"),
+    ("3.4.1(c)(ii)(b)", "(a)", "3.4.1(c)(ii)(a)"),
+    ("3.4.1(c)(ii)(b)", "(i)", "3.4.1(c)(i)"),
+    ("3.4.1(c)(ii)", "(a)(i)", "3.4.1(a)(i)"),
+    ("3.4.1(a)(2)", "(1)", "3.4.1(a)(1)"),
+])
+def test_nested_relative_reference_levels(context, relative, target):
+    assert reference_targets(f"See sub-para {relative}.", context, CAR_DOC) == [(CAR_DOC, target)]
+
+
+def test_relative_reference_explicit_base_and_alphabetic_i():
+    targets = reference_targets("See sub-para (i) of Para 3.4.2(b).", "3.4.1(a)(ii)", CAR_DOC)
+    assert (CAR_DOC, "3.4.2(b)(i)") in targets
+    assert (CAR_DOC, "3.4.1(a)(i)") not in targets
+    assert reference_targets("See sub-para (i).", "3.4.1(h)", CAR_DOC,
+                             {"3.4.1(h)", "3.4.1(i)"}) == [(CAR_DOC, "3.4.1(i)")]
+
+
+@pytest.mark.parametrize("spacing", ["", " "])
+def test_fully_qualified_subclauses_and_numbered_children(spacing):
+    text = f"""3.8.1 Facilities
+    3.8.1{spacing}(a) Meals.
+        1. First option.
+        2. Second option; see sub-para (1).
+    3.8.1{spacing}(b) Accommodation.
+"""
+    chunks = {chunk.clause_id: chunk for chunk in parse_car(text)}
+    assert chunks["3.8.1(a)(2)"].refs == ["3.8.1(a)(1)"]
+    assert "Accommodation" not in chunks["3.8.1(a)"].text
+    assert reference_graph(list(chunks.values()))["unresolved"] == {}
+
+
+@pytest.mark.parametrize(("definition", "term"), [
+    ('“Block time” means elapsed flight time.', "block time"),
+    ('"Block time" SHALL MEAN elapsed flight time.', "block time"),
+    ("Block time refers to elapsed flight time.", "block time"),
+    ("Block time is defined as elapsed flight time.", "block time"),
+    ("Block time: elapsed flight time.", "block time"),
+    ("Block time — elapsed flight time.", "block time"),
+    ("Block time shall be elapsed flight time.", "block time"),
+])
+def test_car_definition_wording_variations(definition, term):
+    chunks = parse_car(f"2. DEFINITIONS\n2.9 {definition}")
+    entries = definition_table(chunks)[term]
+    assert entries[0]["clause_id"] == "2.9"
+    assert entries[0]["text"] == chunks[-1].text
+
+
+@pytest.mark.parametrize("doc_id", ["INDIGO-COC-DOM", "INDIGO-COC-INTL"])
+@pytest.mark.parametrize(("entry", "term"), [
+    ('- **“Block time”** means elapsed flight time.', "block time"),
+    ('+ "Block time" SHALL MEAN elapsed flight time.', "block time"),
+    ("• ‘Block time’ refers to elapsed flight time.", "block time"),
+    ("1) Block time is defined as elapsed flight time.", "block time"),
+    ("(1) __Block time__: elapsed flight time.", "block time"),
+    ("1. Block time — elapsed flight time.", "block time"),
+    ('* “Customer’s ticket” means a booking record.', "customer’s ticket"),
+    ('* “Flight Segment" or “Route ” means a flight segment.', "flight segment"),
+    ('* "Unconnected Segments” means separate segments.', "unconnected segments"),
+])
+def test_indigo_definition_formatting_variations(doc_id, entry, term):
+    text = (f"1\\. Definitions\n**1\\.1 Definitions**\n{entry}\n"
+            "    Continued definition text.\n- “Next term” means something else.")
+    chunks = parse_markdown(text, doc_id)
+    definitions = definition_table(chunks)
+    assert term in definitions
+    assert definitions[term][0]["doc_id"] == doc_id
+    assert "Continued definition text." in definitions[term][0]["text"]
+    assert "Next term" not in definitions[term][0]["text"]
+    assert definitions[term][0]["text"] in chunks[-1].text
+    assert "next term" in definitions
+
+
+def test_expected_formal_definitions_in_each_source(car):
+    definitions = definition_table(list(car.values()))
+    for number, term in enumerate([
+        "airline", "operating airline", "reservation", "final destination",
+        "a person with reduced mobility", "denied boarding", "volunteer",
+        "cancellation", "block time", "downgrading",
+    ], 1):
+        assert definitions[term][0]["clause_id"] == f"2.{number}"
+    for name, doc_id in [("domestic", "INDIGO-COC-DOM"), ("international", "INDIGO-COC-INTL")]:
+        chunks = parse_markdown((ROOT / f"corpus/raw/indigo-coc-{name}.md").read_text(), doc_id)
+        definitions = definition_table(chunks)
+        for term in ["booking", "baggage", "airport charges", "force majeure", "asf"]:
+            assert definitions[term][0]["doc_id"] == doc_id
+            assert definitions[term][0]["clause_id"] == "1.1"
+        if name == "domestic":
+            assert definitions["route"] == definitions["flight segment"]
+        else:
+            for term in ["unconnected segments", "marketing carrier", "operating carrier"]:
+                assert definitions[term][0]["doc_id"] == doc_id

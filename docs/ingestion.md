@@ -27,11 +27,16 @@ CAR's numbered clauses begin in its leftmost three columns. Wrapped references, 
 boundaries supply the starting page number, while repeated headers, footers, and the final signature
 are excluded. Clauses crossing pages remain intact.
 
-Each complete numbered clause gets one chunk, including all of `3.3.2`. Lettered CAR children also
+Each complete numbered clause gets one chunk, including all of `3.3.2`. CAR children also
 get explicit views such as `3.8.1(a)` so graph edges have precise targets. Parent/child passages
 overlap intentionally; consumers should account for this when assembling context. Long clauses
 are not split into arbitrary token windows. Heading-only sections are retained because they can
 also be referenced (for example, `3.8`).
+
+Child markers can use `a)`, `(a)`, `a.`, uppercase letters, roman numerals, or numbered lists.
+Fully qualified labels such as `3.8.1(a)` and `3.8.1 (a)` are supported as well. Layout indentation
+determines nested child scopes, with tabs expanded before comparing indentation. A reference wrapping
+immediately after `Para` or `sub-para` remains body text even if its next line looks like a child label.
 
 The two IndiGo snapshots use escaped Markdown numbers, bold headings, and ordinary numbered lists.
 The parser recognizes their ordered top-level sections and dotted subsections, retaining lists
@@ -56,11 +61,20 @@ Generated files under `corpus/processed/` are ignored by Git and can be regenera
   `chunk_id`, and the definition's source `text`. A term can have several definitions across documents.
   CAR Section 2 supplies formal definitions; `extraordinary circumstances` and `force majeure`
   explicitly point to CAR `1.4`, where that concept is described. CoC entries and quoted aliases
-  are extracted from their definitions section (`1.1`).
+  are extracted from their definitions section (`1.1`). Quotes may be straight or curly, including
+  single quotes; entries may use different bullet or numbered-list markers. Bare terms followed by
+  definition wording (`means`, `shall mean`, `refers to`, `is defined as`, `is`, `shall be`) or a
+  colon/dash are also recognized. Bold/underscore emphasis is removed by the Markdown parser.
 
 Reference extraction handles `Para`/`Paragraph`/`Clause`, case differences, spaces before `(a)`,
 comma/conjunction/slash-separated targets, nested qualifiers such as `(c)(i)`, and relative
-`sub-para (a) and (b)`. Relative letters resolve against the current numbered clause. Explicit
+`sub-para (a) and (b)`. Relative references retain the enclosing qualifier hierarchy: from
+`3.4.1(c)(ii)`, `(i)` resolves to `3.4.1(c)(i)`, while `(a)` resolves to `3.4.1(a)`.
+An explicit `of Para ...` supplies the reference context. Compound qualifiers such as `(a)(i)`
+start at the numbered clause. Existing parsed targets disambiguate a letter such as alphabetic `(i)`
+when the default roman-level candidate is absent and there is one matching alternative. References
+inside nested text are resolved in that text's own scope, including when exported on an overlapping
+parent chunk. The graph uses these resolved edges rather than interpreting flattened parent text again. Explicit
 CoC references to `Para 3.2 of DGCA CAR - Section 3, Series M, Part IV` target the CAR document.
 Other references stay within their source document. `refs.json` is authoritative for target document
 identity because the existing `Chunk.refs` contract carries only clause IDs.
@@ -89,8 +103,10 @@ uv run pytest -q
 indentation so CI can test the real layout without downloading a PDF or requiring Poppler. When the
 PDF and `pdftotext` are available, an additional integration test checks extraction against the fixture.
 
-Tests cover ten known CAR reference cases, page continuations, parent/child boundaries, both CoC
+Tests cover ten known CAR reference cases, alternative child markers and indentation, nested relative
+references, page continuations, parent/child boundaries, both CoC
 snapshots, reverse graph edges, explicit cross-document references, unresolved targets, definitions
-and aliases, schema validation, unique IDs, text hashes, and byte-identical rebuilds. Hash mismatches,
+and aliases (including alternative formatting and wording in both formats), schema validation,
+unique IDs, text hashes, and byte-identical rebuilds. Hash mismatches,
 duplicate clauses, missing sources, and a missing PDF tool must fail clearly. The current pinned
 sources produce 246 chunks: CAR 81, domestic CoC 84, international CoC 81.
