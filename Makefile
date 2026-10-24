@@ -6,3 +6,4 @@ ingest:    ; uv run python cli/ingest.py
 eval:      ; uv run python cli/evaluate.py
 test:      ; uv run pytest -q
 lint:      ; uv run ruff check .
+corpus:    ; uv run python scripts/fetch_corpus.py
