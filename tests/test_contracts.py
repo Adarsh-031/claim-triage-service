@@ -68,7 +68,7 @@ def test_result_example_validates():
 
 def test_route_serializes_as_strings():
     assert Route.PAY.value == "pay_as_computed"
-    assert json.loads(Route.PAY.model_dump_json()) == "pay_as_computed"
+    assert json.loads(json.dumps(Route.PAY)) == "pay_as_computed"
 
 
 def test_all_required_escalation_reasons_exist():
@@ -81,5 +81,5 @@ def test_all_required_escalation_reasons_exist():
 
 
 def test_run_state_accepts_partial_graph_state():
-    state: RunState = {"run_id": "run-1", "route": Route.ESCALATE, "errors": []}
+    state: RunState = {"claim": {"pnr": "AB12CD"}, "route": Route.ESCALATE, "trace": []}
     assert state["route"] is Route.ESCALATE
