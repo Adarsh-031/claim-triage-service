@@ -110,12 +110,15 @@
       formMessage.textContent = "";
       for (const error of errors) {
         const field = String(error.field || "").replace(/^body\.?/, "");
+        const message = error.msg || "Invalid value";
         const alternateMatch = field.match(/^alternate(?:\.(offered|accepted|departure_delay_minutes))?/);
-        const targetName = alternateMatch
+        let targetName = alternateMatch
           ? ({offered: "alternate_offered", accepted: "alternate_accepted", departure_delay_minutes: "alternate_departure_delay_minutes"}[alternateMatch[1]] || "alternate_offered")
           : field.split(".")[0];
+        if (!targetName && /delay_minutes/.test(message)) targetName = "delay_minutes";
+        if (!targetName && /origin and destination/.test(message)) targetName = "destination";
+        if (!targetName && /alternate\.accepted/.test(message)) targetName = "alternate_accepted";
         const input = targetName && form.elements.namedItem(targetName);
-        const message = error.msg || "Invalid value";
         if (input) {
           input.setAttribute("aria-invalid", "true");
           const errorNode = form.querySelector(`[data-error-for="${CSS.escape(targetName)}"]`);
