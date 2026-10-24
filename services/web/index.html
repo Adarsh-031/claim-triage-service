@@ -1,57 +1,367 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Claim Triage – Officer Console</title>
-<style>
-body{font-family:system-ui,sans-serif;margin:0;background:#f8fafc;color:#111}
-header{background:#e2e8f0;padding:12px 20px;font-weight:600}
-main{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px}
-section{background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:16px}
-label{display:block;font-size:13px;color:#475569;margin-top:8px}
-input,select,textarea{width:100%;padding:6px;box-sizing:border-box}
-button{margin-top:12px;padding:8px 16px;background:#1a56db;color:#fff;border:0;border-radius:6px;cursor:pointer}
-.rec{background:#fef3c7;border:1px solid #b45309;padding:10px;border-radius:6px;font-weight:600}
-.cite{border:1px solid #1a56db;background:#e8f0fe;padding:6px;margin:6px 0;border-radius:4px;cursor:pointer}
-.err{color:#b91c1c;font-size:13px}
-pre{white-space:pre-wrap;font-size:12px}
-</style></head><body>
-<header>Claim Triage – officer console (recommendations only; a human makes the final decision)</header>
-<main>
-<section><h3>1. New claim</h3>
-<form id="f">
-<label>PNR<input name="pnr" value="ABC123"></label>
-<label>Airline code<input name="airline_code" value="6E"></label>
-<label>Flight number<input name="flight_number" value="6E512"></label>
-<label>Flight date<input name="flight_date" type="date" value="2026-10-14"></label>
-<label>Origin<input name="origin" value="BLR"></label>
-<label>Destination<input name="destination" value="DEL"></label>
-<label>Block time (min)<input name="block_time_minutes" type="number" value="165"></label>
-<label>Disruption type<select name="disruption_type">
-<option>cancellation</option><option>delay</option><option>denied_boarding</option><option>downgrade</option><option>unknown</option></select></label>
-<label>Notice (min before departure)<input name="notice_minutes_before_departure" type="number" value="90"></label>
-<label>Passenger statement<textarea name="statement" rows="5">My flight was cancelled. I was already at the airport and was told 90 minutes before departure. The airline put me on a flight four hours later, which I took. I want the compensation for cancellation.</textarea></label>
-<button>Submit claim</button><div id="errors" class="err"></div>
-</form></section>
-<section><h3>2. Result</h3><div id="out">No run yet.</div></section>
-</main>
-<script>
-const API = location.protocol + "//" + location.hostname + ":8000";
-const f = document.getElementById("f"), out = document.getElementById("out"), errs = document.getElementById("errors");
-f.onsubmit = async (e) => {
-  e.preventDefault(); errs.textContent = "";
-  const d = Object.fromEntries(new FormData(f));
-  for (const k of ["block_time_minutes","notice_minutes_before_departure"]) d[k] = d[k] ? Number(d[k]) : null;
-  const r = await fetch(API + "/v1/claims", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(d)});
-  const j = await r.json();
-  if (!r.ok) { errs.innerHTML = (j.errors||[]).map(x => `${x.field}: ${x.msg}`).join("<br>") || JSON.stringify(j); return; }
-  out.textContent = "Queued " + j.run_id + "…"; poll(j.run_id);
-};
-async function poll(id) {
-  const j = await (await fetch(API + "/v1/runs/" + id)).json();
-  if (["queued","running"].includes(j.status)) return setTimeout(() => poll(id), 1000);
-  const r = j.result || {};
-  out.innerHTML = `<p>run ${id} · <b>${j.status}</b></p>
-   <div class="rec">${(r.route||"").toUpperCase()} – ${r.summary||j.error||""}</div>
-   ${r.escalation_reason ? `<p>Escalation reason: <b>${r.escalation_reason}</b></p>` : ""}
-   <h4>Citations</h4>${(r.citations||[]).map(c => `<div class="cite" title="${c.quote}">${c.doc_id} ${c.clause_id}</div>`).join("") || "<p>none</p>"}
-   <p><a href="${API}/v1/runs/${id}/trace" target="_blank">View trace</a></p>`;
-}
-</script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claim triage</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f3f6fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { padding: 1rem max(1rem, calc((100% - 1120px) / 2)); background: #15324b; color: white; }
+    header h1 { margin: 0; font-size: 1.25rem; }
+    header p { margin: .35rem 0 0; color: #d6e4ef; font-size: .9rem; }
+    main { max-width: 1120px; margin: 1.5rem auto; padding: 0 1rem; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); gap: 1rem; align-items: start; }
+    section { padding: 1.25rem; border: 1px solid #d8e0e8; border-radius: 10px; background: white; }
+    h2 { margin: 0 0 1rem; font-size: 1.1rem; }
+    h3 { margin: 1.25rem 0 .5rem; font-size: .95rem; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+    label { display: block; margin: .65rem 0 .25rem; font-size: .85rem; font-weight: 600; }
+    input, select, textarea { width: 100%; padding: .6rem; border: 1px solid #b9c5d1; border-radius: 6px; background: white; color: inherit; font: inherit; }
+    textarea { resize: vertical; }
+    input:focus, select:focus, textarea:focus, button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 1px; }
+    [aria-invalid="true"] { border-color: #b42318; }
+    .field-error, .error, .hint { min-height: 1.2em; margin: .2rem 0 0; font-size: .8rem; }
+    .field-error, .error { color: #b42318; }
+    .hint { color: #5c6878; }
+    button { padding: .6rem .9rem; border: 0; border-radius: 6px; background: #1769aa; color: white; font: inherit; font-weight: 650; cursor: pointer; }
+    button.secondary { border: 1px solid #9aaabd; background: white; color: #172033; }
+    button:disabled { cursor: wait; opacity: .6; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .notice { margin: .75rem 0 0; color: #465466; font-size: .85rem; }
+    .result-card { padding: .85rem; border-radius: 8px; background: #f5f8fb; }
+    .badge { display: inline-block; padding: .2rem .55rem; border-radius: 99px; background: #dceaf6; font-size: .8rem; font-weight: 700; }
+    .citation { margin: .5rem 0; padding: .65rem; border-left: 3px solid #3a7db5; background: #f5f8fb; }
+    .citation p { margin: .35rem 0 0; white-space: pre-wrap; }
+    .feedback { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid #d8e0e8; }
+    pre { overflow: auto; max-height: 18rem; padding: .75rem; border-radius: 6px; background: #f3f6fa; white-space: pre-wrap; }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+    @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Claim triage</h1>
+    <p>Recommendations support an officer’s decision and never authorize payment.</p>
+  </header>
+  <main>
+    <section aria-labelledby="claim-heading">
+      <h2 id="claim-heading">New claim</h2>
+      <form id="claim-form" novalidate>
+        <div class="grid">
+          <div><label for="pnr">PNR</label><input id="pnr" name="pnr" autocomplete="off" required><p class="field-error" data-error-for="pnr"></p></div>
+          <div><label for="airline-code">Airline code</label><input id="airline-code" name="airline_code" required><p class="field-error" data-error-for="airline_code"></p></div>
+          <div><label for="flight-number">Flight number</label><input id="flight-number" name="flight_number" required><p class="field-error" data-error-for="flight_number"></p></div>
+          <div><label for="flight-date">Flight date</label><input id="flight-date" name="flight_date" type="date" required><p class="field-error" data-error-for="flight_date"></p></div>
+          <div><label for="origin">Origin (IATA)</label><input id="origin" name="origin" maxlength="3" required><p class="field-error" data-error-for="origin"></p></div>
+          <div><label for="destination">Destination (IATA)</label><input id="destination" name="destination" maxlength="3" required><p class="field-error" data-error-for="destination"></p></div>
+        </div>
+
+        <h3>Disruption</h3>
+        <div class="grid">
+          <div><label for="disruption-type">Disruption type</label><select id="disruption-type" name="disruption_type" required>
+            <option value="unknown">Unknown</option><option value="cancellation">Cancellation</option><option value="delay">Delay</option><option value="denied_boarding">Denied boarding</option><option value="downgrade">Downgrade</option>
+          </select><p class="field-error" data-error-for="disruption_type"></p></div>
+          <div><label for="block-time">Block time (minutes)</label><input id="block-time" name="block_time_minutes" type="number" min="15" max="600" step="1"><p class="field-error" data-error-for="block_time_minutes"></p></div>
+          <div><label for="notice-minutes">Notice before departure (minutes)</label><input id="notice-minutes" name="notice_minutes_before_departure" type="number" min="0" step="1"><p class="field-error" data-error-for="notice_minutes_before_departure"></p></div>
+          <div><label for="delay-minutes">Delay (minutes)</label><input id="delay-minutes" name="delay_minutes" type="number" min="0" max="10080" step="1"><p class="field-error" data-error-for="delay_minutes"></p></div>
+          <div><label for="reported-airport">At the airport?</label><select id="reported-airport" name="reported_at_airport"><option value="">Not reported</option><option value="true">Yes</option><option value="false">No</option></select><p class="field-error" data-error-for="reported_at_airport"></p></div>
+          <div><label for="contact-provided">Contact information provided?</label><select id="contact-provided" name="contact_info_provided"><option value="">Not reported</option><option value="true">Yes</option><option value="false">No</option></select><p class="field-error" data-error-for="contact_info_provided"></p></div>
+        </div>
+
+        <h3>Alternate flight</h3>
+        <div class="grid">
+          <div><label for="alternate-offered">Alternate flight offered?</label><select id="alternate-offered" name="alternate_offered"><option value="">Not reported</option><option value="true">Yes</option><option value="false">No</option></select><p class="field-error" data-error-for="alternate_offered"></p></div>
+          <div><label for="alternate-accepted">Alternate flight accepted?</label><select id="alternate-accepted" name="alternate_accepted"><option value="">Not reported</option><option value="true">Yes</option><option value="false">No</option></select><p class="field-error" data-error-for="alternate_accepted"></p></div>
+          <div><label for="alternate-delay">Alternate departure delay (minutes)</label><input id="alternate-delay" name="alternate_departure_delay_minutes" type="number" min="0" max="10080" step="1"><p class="field-error" data-error-for="alternate_departure_delay_minutes"></p></div>
+          <div><label for="ticket-fare">Ticket fare (INR)</label><input id="ticket-fare" name="ticket_fare_inr" type="number" min="0" max="1000000" step="0.01"><p class="field-error" data-error-for="ticket_fare_inr"></p></div>
+        </div>
+        <div><label for="stated-cause">Stated cause (optional)</label><input id="stated-cause" name="stated_cause" maxlength="300"><p class="field-error" data-error-for="stated_cause"></p></div>
+        <div><label for="statement">Passenger statement</label><textarea id="statement" name="statement" rows="5" minlength="10" maxlength="4000" required></textarea><p class="field-error" data-error-for="statement"></p></div>
+        <p id="form-message" class="error" role="alert"></p>
+        <div class="actions">
+          <button id="submit-button" type="submit">Submit claim</button>
+          <button id="demo-button" class="secondary" type="button">Load demo claim</button>
+        </div>
+      </form>
+    </section>
+
+    <section aria-labelledby="result-heading" aria-live="polite">
+      <h2 id="result-heading">Result</h2>
+      <div id="result"><p class="hint">Submit a claim or load the demo to begin.</p></div>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+    const API = `${location.protocol}//${location.hostname}:8000`;
+    const form = document.getElementById("claim-form");
+    const result = document.getElementById("result");
+    const formMessage = document.getElementById("form-message");
+    const submitButton = document.getElementById("submit-button");
+    const demoButton = document.getElementById("demo-button");
+    const terminalStatuses = new Set(["completed", "escalated", "failed"]);
+    let activeRunId = null;
+    let pollToken = 0;
+
+    function showFieldErrors(errors) {
+      for (const node of form.querySelectorAll("[data-error-for]")) node.textContent = "";
+      for (const input of form.querySelectorAll("[name]")) input.removeAttribute("aria-invalid");
+      formMessage.textContent = "";
+      for (const error of errors) {
+        const field = String(error.field || "").replace(/^body\.?/, "");
+        const message = error.msg || "Invalid value";
+        const alternateMatch = field.match(/^alternate(?:\.(offered|accepted|departure_delay_minutes))?/);
+        let targetName = alternateMatch
+          ? ({offered: "alternate_offered", accepted: "alternate_accepted", departure_delay_minutes: "alternate_departure_delay_minutes"}[alternateMatch[1]] || "alternate_offered")
+          : field.split(".")[0];
+        if (!targetName && /delay_minutes/.test(message)) targetName = "delay_minutes";
+        if (!targetName && /origin and destination/.test(message)) targetName = "destination";
+        if (!targetName && /alternate\.accepted/.test(message)) targetName = "alternate_accepted";
+        const input = targetName && form.elements.namedItem(targetName);
+        if (input) {
+          input.setAttribute("aria-invalid", "true");
+          const errorNode = form.querySelector(`[data-error-for="${CSS.escape(targetName)}"]`);
+          if (errorNode) errorNode.textContent = message;
+        } else {
+          formMessage.textContent = [formMessage.textContent, message].filter(Boolean).join(" ");
+        }
+      }
+      const firstInvalid = form.querySelector('[aria-invalid="true"]');
+      if (firstInvalid) firstInvalid.focus();
+    }
+
+    function optionalNumber(data, key) {
+      const value = data.get(key);
+      return value === "" ? null : Number(value);
+    }
+
+    function optionalBoolean(data, key) {
+      const value = data.get(key);
+      return value === "" ? null : value === "true";
+    }
+
+    function makeClaim() {
+      const data = new FormData(form);
+      const claim = {
+        contract_version: "1.0",
+        pnr: data.get("pnr").trim().toUpperCase(),
+        airline_code: data.get("airline_code").trim().toUpperCase(),
+        flight_number: data.get("flight_number").trim().toUpperCase(),
+        flight_date: data.get("flight_date"),
+        origin: data.get("origin").trim().toUpperCase(),
+        destination: data.get("destination").trim().toUpperCase(),
+        block_time_minutes: optionalNumber(data, "block_time_minutes"),
+        disruption_type: data.get("disruption_type"),
+        notice_minutes_before_departure: optionalNumber(data, "notice_minutes_before_departure"),
+        delay_minutes: optionalNumber(data, "delay_minutes"),
+        reported_at_airport: optionalBoolean(data, "reported_at_airport"),
+        contact_info_provided: optionalBoolean(data, "contact_info_provided"),
+        stated_cause: data.get("stated_cause").trim() || null,
+        ticket_fare_inr: optionalNumber(data, "ticket_fare_inr"),
+        statement: data.get("statement").trim(),
+        alternate: null,
+      };
+      const offered = data.get("alternate_offered");
+      const accepted = data.get("alternate_accepted");
+      const alternateDelay = data.get("alternate_departure_delay_minutes");
+      if (offered !== "" || accepted !== "" || alternateDelay !== "") {
+        if (offered === "") {
+          const error = new Error("Select whether an alternate flight was offered.");
+          error.field = "alternate_offered";
+          throw error;
+        }
+        claim.alternate = {
+          offered: offered === "true",
+          accepted: accepted === "" ? null : accepted === "true",
+          departure_delay_minutes: alternateDelay === "" ? null : Number(alternateDelay),
+        };
+      }
+      return claim;
+    }
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function setStatus(message) {
+      result.replaceChildren(element("p", "hint", message));
+    }
+
+    function formatAmount(value) {
+      return new Intl.NumberFormat(undefined, {style: "currency", currency: "INR", maximumFractionDigits: 2}).format(value);
+    }
+
+    function renderRun(run) {
+      const recommendation = run.result || {};
+      result.replaceChildren();
+      const card = element("div", "result-card");
+      const status = element("span", "badge", run.status);
+      card.append(status);
+      if (recommendation.route) card.append(" ", element("strong", "", recommendation.route.replaceAll("_", " ")));
+      if (recommendation.summary) card.append(element("p", "", recommendation.summary));
+      if (run.error) card.append(element("p", "error", run.error));
+      const amount = recommendation.compensation_inr ?? recommendation.amount;
+      if (amount !== null && amount !== undefined) card.append(element("p", "", `Amount: ${formatAmount(amount)}`));
+      if (recommendation.escalation_reason) card.append(element("p", "", `Escalation reason: ${recommendation.escalation_reason}`));
+      result.append(card);
+
+      const citations = recommendation.citations || [];
+      const citationHeading = element("h3", "", "Citations");
+      result.append(citationHeading);
+      if (!citations.length) result.append(element("p", "hint", "No citations returned."));
+      for (const citation of citations) {
+        const item = element("article", "citation");
+        item.append(element("strong", "", `${citation.clause_id || "Clause"} · ${citation.doc_id || "Source"}`));
+        item.append(element("p", "", citation.quote || "No quote provided."));
+        result.append(item);
+      }
+
+      const traceButton = element("button", "secondary", "View trace");
+      traceButton.type = "button";
+      traceButton.addEventListener("click", () => loadTrace(run.run_id, traceButton));
+      result.append(traceButton);
+      if (run.status === "completed" || run.status === "escalated") renderFeedback(run.run_id);
+    }
+
+    async function loadTrace(runId, button) {
+      button.disabled = true;
+      button.textContent = "Loading trace…";
+      try {
+        const response = await fetch(`${API}/v1/runs/${encodeURIComponent(runId)}/trace`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Could not load trace.");
+        const trace = element("pre", "", JSON.stringify(data, null, 2));
+        button.after(trace);
+        button.remove();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "View trace";
+        formMessage.textContent = error.message;
+      }
+    }
+
+    function renderFeedback(runId) {
+      const wrapper = element("div", "feedback");
+      wrapper.append(element("h3", "", "Was this recommendation helpful?"));
+      const noteLabel = element("label", "", "Optional note");
+      const note = element("textarea");
+      note.rows = 2;
+      note.maxLength = 2000;
+      noteLabel.append(note);
+      wrapper.append(noteLabel);
+      const actions = element("div", "actions");
+      for (const [agree, label] of [[true, "Agree"], [false, "Disagree"]]) {
+        const button = element("button", agree ? "" : "secondary", label);
+        button.type = "button";
+        button.addEventListener("click", () => sendFeedback(runId, agree, note.value, actions));
+        actions.append(button);
+      }
+      wrapper.append(actions);
+      result.append(wrapper);
+    }
+
+    async function sendFeedback(runId, agree, note, actions) {
+      for (const button of actions.querySelectorAll("button")) button.disabled = true;
+      try {
+        const response = await fetch(`${API}/v1/runs/${encodeURIComponent(runId)}/feedback`, {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify({agree, note: note.trim() || null}),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Could not save feedback.");
+        actions.replaceChildren(element("p", "hint", "Feedback saved. Thank you."));
+      } catch (error) {
+        for (const button of actions.querySelectorAll("button")) button.disabled = false;
+        formMessage.textContent = error.message;
+      }
+    }
+
+    async function pollRun(pollUrl, runId, token) {
+      const deadline = Date.now() + 90000;
+      const url = new URL(pollUrl, API);
+      while (Date.now() < deadline && token === pollToken) {
+        const response = await fetch(url);
+        const run = await response.json();
+        if (!response.ok) throw new Error(run.detail || "Could not read claim status.");
+        if (terminalStatuses.has(run.status)) {
+          activeRunId = runId;
+          renderRun(run);
+          return;
+        }
+        setStatus(`Claim ${runId} is ${run.status}. Checking again…`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      if (token === pollToken) setStatus("This claim is still processing after 90 seconds. You can submit it again later or check its status with support.");
+    }
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      pollToken += 1;
+      activeRunId = null;
+      showFieldErrors([]);
+      result.replaceChildren(element("p", "hint", "Submitting claim…"));
+      submitButton.disabled = true;
+      try {
+        const claim = makeClaim();
+        const response = await fetch(`${API}/v1/claims`, {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify(claim),
+        });
+        const data = await response.json();
+        if (response.status === 422) {
+          showFieldErrors(data.errors || []);
+          formMessage.textContent = [formMessage.textContent, "Claim was rejected; no run was created."].filter(Boolean).join(" ");
+          result.replaceChildren(element("p", "hint", "No run was created because the claim was invalid."));
+          return;
+        }
+        if (!response.ok) throw new Error(data.detail || `Claim submission failed (${response.status}).`);
+        if (!data.poll_url || !data.run_id) throw new Error("The API response did not include a run ID and poll URL.");
+        activeRunId = data.run_id;
+        setStatus(`Claim ${data.run_id} is queued. Checking status…`);
+        const token = pollToken;
+        await pollRun(data.poll_url, data.run_id, token);
+      } catch (error) {
+        if (error.field) showFieldErrors([{field: error.field, msg: error.message}]);
+        else formMessage.textContent = activeRunId
+          ? `Run ${activeRunId} was created, but its result could not be loaded: ${error.message}`
+          : error.message || "Could not submit the claim.";
+        if (!activeRunId) setStatus("No run was created.");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+
+    demoButton.addEventListener("click", async () => {
+      demoButton.disabled = true;
+      formMessage.textContent = "";
+      try {
+        const response = await fetch("/demo-claim.json");
+        if (!response.ok) throw new Error("Could not load the demo claim.");
+        const demo = await response.json();
+        const claim = demo.claim;
+        for (const [key, value] of Object.entries(claim)) {
+          if (key === "alternate") continue;
+          const input = form.elements.namedItem(key);
+          if (input) input.value = value ?? "";
+        }
+        const alternate = claim.alternate;
+        form.elements.namedItem("alternate_offered").value = alternate ? String(alternate.offered) : "";
+        form.elements.namedItem("alternate_accepted").value = alternate?.accepted == null ? "" : String(alternate.accepted);
+        form.elements.namedItem("alternate_departure_delay_minutes").value = alternate?.departure_delay_minutes ?? "";
+        showFieldErrors([]);
+        setStatus(`Demo loaded: ${demo.description}`);
+      } catch (error) {
+        formMessage.textContent = error.message;
+      } finally {
+        demoButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -36,7 +36,9 @@ def handle(job: dict) -> None:
 
 def main() -> None:
     init_db()
-    r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    # Keep the client read timeout above BRPOP's server-side timeout so an
+    # idle queue returns control normally instead of terminating the worker.
+    r = redis.Redis.from_url(settings.redis_url, decode_responses=True, socket_timeout=10)
     log.info(json.dumps("worker started"))
     while True:
         item = r.brpop(settings.queue_name, timeout=5)
