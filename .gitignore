@@ -1,4 +1,5 @@
 .env
+.env
 __pycache__/
 *.pyc
 .venv/
@@ -8,5 +9,3 @@ data/
 *.log
 build/
 *.egg-info/
-.env
-.env.example
