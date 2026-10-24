@@ -16,7 +16,7 @@ Requirement IDs (F, A, L, D, demo items) refer to `MiniProject_04.pdf`; FR/NFR I
 | Regulation | DGCA CAR Sec 3, Series M, Part IV, **Rev 4 (eff. 15 Feb 2023)** | Mandated corpus |
 | Agent framework | **LangGraph** | Explicit state graph with loops, bounded recursion, checkpointable state (A1) |
 | Retrieval framework | **LangChain** (`langchain-chroma`, `langchain-huggingface`, BM25 retriever) | Brief L1 requires LangChain or LlamaIndex; integrates directly with LangGraph tools |
-| Vector store | **Chroma** (own container) | Brief L1 requires FAISS or Chroma. Chroma runs as a server, so every scaled worker shares one index and we can upsert individual chunks (partial re-embed). **Replaces Qdrant from the scaffold.** |
+| Vector store | **Chroma** (own container) | Brief L1 requires FAISS or Chroma. Chroma runs as a server, so every scaled worker shares one index and we can upsert individual chunks (partial re-embed). **Uses the project’s shared vector-store service.** |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2`, local, CPU | Free, small (384-dim), brief §12 |
 | LLM | OpenRouter free model (tool-calling capable) → second free model as fallback → offline stub | Free tier; provider swappable by config (D4, §12) |
 | Queue | Redis lists (`BLMOVE` reliable-queue pattern) | Already needed for cache + rate limit; no extra broker |
@@ -307,7 +307,6 @@ Rate limit: Redis token bucket per API key. Report p95 and cost per run with cac
 | Rejected | Reason |
 |---|---|
 | Single-pass RAG (embed → top-k → answer) | Misses provisions the question never mentions; fails §4.1 by design |
-| Qdrant | Not allowed by brief L1 (FAISS or Chroma) |
 | FAISS | In-process index means each scaled worker holds its own copy and partial updates are clumsy; Chroma server is shared |
 | CrewAI | Less control over explicit loops, bounds and state persistence than LangGraph |
 | Celery | Extra moving parts for a two-queue system; Redis lists + reliable-queue pattern suffice |

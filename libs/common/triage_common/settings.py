@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     llm_provider: str = "stub"
+    llm_base_url: str = "http://llm-stub:8001/v1"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_api_key: str = ""
     llm_model_primary: str = ""
@@ -26,7 +27,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://redis:6379/0"
     database_url: str = "postgresql+psycopg://triage:triage@postgres:5432/triage"
-    qdrant_url: str = "http://qdrant:6333"
+    chroma_url: str = "http://chroma:8000"
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
     rate_limit_per_min: int = 30
 
