@@ -28,6 +28,10 @@ make ingest        # write corpus/processed/{chunks.jsonl,refs.json,definitions.
 
 See [the ingestion guide](docs/ingestion.md) for artifact formats, reference resolution, and tests.
 
+For production-like troubleshooting, see the [operational runbooks](docs/runbooks.md) and
+[incident log](docs/incident-log.md). The runbooks call out features that are not implemented yet,
+including Chroma indexing and the separate verifier worker.
+
 Run the stack:
 
 ```bash
@@ -93,7 +97,7 @@ docs/              Requirements, design, report material, runbooks, incident log
 | P0 | Clause chunks + reference/definition exports | implemented; embedding/indexing pending |
 | P0 | Agent with retrieval tools, demo case 4.1 | TODO |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
-| P2 | Dashboards, Locust/scaling study, caching study, prompt A/B, runbooks | TODO |
+| P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | TODO; runbooks documented with current limitations |
 
 ## Configuration
 
