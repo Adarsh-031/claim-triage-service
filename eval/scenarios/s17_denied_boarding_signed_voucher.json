@@ -1,0 +1,13 @@
+{
+  "id": "s17_denied_boarding_signed_voucher",
+  "description": "Passenger accepted the denied-boarding voucher in a signed agreement and asks for a second payment.",
+  "claim": {
+    "pnr": "DB017A", "airline_code": "6E", "flight_number": "6E717",
+    "flight_date": "2026-11-28", "origin": "BLR", "destination": "MAA",
+    "block_time_minutes": 45, "disruption_type": "denied_boarding",
+    "reported_at_airport": true, "contact_info_provided": true,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 180},
+    "statement": "I was denied boarding against my will and signed an agreement accepting IndiGo's travel voucher as compensation. I have received it and now request duplicate cash compensation."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.7.1", "10.2(c)"], "must_not": "duplicate compensation after valid signed agreement and issued voucher"}
+}

@@ -1,0 +1,13 @@
+{
+  "id": "s04_cancel_notice_at_least_two_weeks",
+  "description": "Cancellation notice 15 days ahead; assess the two-week notice rule.",
+  "claim": {
+    "pnr": "CA004A", "airline_code": "6E", "flight_number": "6E404",
+    "flight_date": "2026-11-15", "origin": "HYD", "destination": "BOM",
+    "block_time_minutes": 110, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 21600, "reported_at_airport": false,
+    "contact_info_provided": true, "alternate": null,
+    "statement": "The airline told me 15 days in advance that my flight was cancelled. I want the cancellation compensation."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.3.1"], "must_not": "compensation under 3.3.2 when notice was at least two weeks"}
+}

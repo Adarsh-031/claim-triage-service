@@ -1,0 +1,13 @@
+{
+  "id": "s16_denied_boarding_no_alternate",
+  "description": "Involuntary denied boarding; passenger does not opt for an alternate flight.",
+  "claim": {
+    "pnr": "DB016A", "airline_code": "6E", "flight_number": "6E616",
+    "flight_date": "2026-11-27", "origin": "BOM", "destination": "DEL",
+    "block_time_minutes": 130, "disruption_type": "denied_boarding",
+    "reported_at_airport": true, "contact_info_provided": true, "ticket_fare_inr": 8000,
+    "alternate": null,
+    "statement": "I had a confirmed booking, checked in within the required time, and was denied boarding against my will. I did not take an alternate flight and request the refund and compensation."
+  },
+  "expected": {"route": "pay_as_computed", "must_cite": ["3.2.2", "3.7.1"]}
+}

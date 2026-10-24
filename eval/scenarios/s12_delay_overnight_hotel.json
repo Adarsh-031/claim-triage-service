@@ -1,0 +1,12 @@
+{
+  "id": "s12_delay_overnight_hotel",
+  "description": "An international flight scheduled for 22:00 is delayed seven hours, crossing the overnight hotel threshold.",
+  "claim": {
+    "pnr": "DL012A", "airline_code": "6E", "flight_number": "6E212",
+    "flight_date": "2026-11-23", "origin": "BLR", "destination": "SIN",
+    "block_time_minutes": 150, "disruption_type": "delay", "delay_minutes": 420,
+    "reported_at_airport": true, "contact_info_provided": true,
+    "statement": "My international flight was scheduled to depart at 22:00 and was delayed seven hours. I checked in on time and waited overnight at the airport. I request hotel accommodation and meals."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.4.1", "3.4.3", "3.8.1(a)", "3.8.1(b)"], "must_include_entitlement": "hotel_accommodation_and_meals"}
+}

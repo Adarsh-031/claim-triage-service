@@ -1,0 +1,13 @@
+{
+  "id": "s14_denied_boarding_alternate_within_hour",
+  "description": "Involuntary denied boarding with an alternate scheduled to depart 30 minutes after the original flight.",
+  "claim": {
+    "pnr": "DB014A", "airline_code": "6E", "flight_number": "6E414",
+    "flight_date": "2026-11-25", "origin": "DEL", "destination": "BOM",
+    "block_time_minutes": 115, "disruption_type": "denied_boarding",
+    "reported_at_airport": true, "contact_info_provided": true,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 30},
+    "statement": "I had a confirmed booking, reported on time, and was denied boarding against my will. The alternate flight departed 30 minutes after the original scheduled departure. I request denied-boarding compensation."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.2.1", "3.2.2"], "must_not": "denied-boarding compensation when an alternate departs within one hour"}
+}

@@ -1,0 +1,12 @@
+{
+  "id": "s11_delay_over_six_hours_no_option",
+  "description": "Domestic delay exceeds six hours; no alternate or refund option is documented and passenger has not chosen a remedy.",
+  "claim": {
+    "pnr": "DL011A", "airline_code": "6E", "flight_number": "6E111",
+    "flight_date": "2026-11-22", "origin": "HYD", "destination": "BOM",
+    "block_time_minutes": 100, "disruption_type": "delay", "delay_minutes": 420,
+    "reported_at_airport": true, "contact_info_provided": true,
+    "statement": "My domestic flight was delayed seven hours. No alternate or refund was offered. I have not said whether I prefer an alternate flight or a refund. What should happen next?"
+  },
+  "expected": {"route": "request_further_evidence", "must_cite": ["3.4.2"], "must_include_entitlement": "passenger choice of alternate flight or full refund"}
+}

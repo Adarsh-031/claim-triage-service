@@ -1,0 +1,13 @@
+{
+  "id": "s22_vietnam_route_out_of_corpus",
+  "description": "A domestic flight wholly within Vietnam raises a claim under Vietnamese law outside this India-focused corpus.",
+  "claim": {
+    "pnr": "VN022A", "airline_code": "6E", "flight_number": "6E222",
+    "flight_date": "2026-12-03", "origin": "SGN", "destination": "HAN",
+    "block_time_minutes": 125, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 60, "reported_at_airport": true,
+    "contact_info_provided": true,
+    "statement": "This IndiGo flight from Ho Chi Minh City to Hanoi was operated wholly within Vietnam. The passenger asks for compensation under Vietnamese passenger-rights law."
+  },
+  "expected": {"route": "escalate", "escalation_reason": "OUT_OF_CORPUS", "must_cite": []}
+}
