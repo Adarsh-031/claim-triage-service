@@ -300,7 +300,10 @@ def _get_clause_impl(clause_id: str, doc_id: str = "CAR-S3-M-IV-R4") -> dict:
 
 
 @tool
-def get_clause(clause_id: str, doc_id: Literal["CAR-S3-M-IV-R4", "INDIGO-COC-DOM", "INDIGO-COC-INTL"] = "CAR-S3-M-IV-R4") -> dict:
+def get_clause(
+    clause_id: str,
+    doc_id: Literal["CAR-S3-M-IV-R4", "INDIGO-COC-DOM", "INDIGO-COC-INTL"] = "CAR-S3-M-IV-R4",
+) -> dict:
     """Retrieve the exact normalized chunk for a clause from chunks.jsonl.
 
     Args:

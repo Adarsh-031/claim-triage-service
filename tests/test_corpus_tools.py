@@ -191,7 +191,7 @@ def test_search_tool_schema_accepts_optional_doc_id_and_literal_mode(chunks_file
     })
     assert result["retrieval_error"] is None
     assert result["chunks"][0]["clause_id"] == "3.3.2"
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         corpus.search_corpus.invoke({
             "query": "cancellation compensation", "doc_id": "UNKNOWN-DOC", "mode": "bm25",
         })
