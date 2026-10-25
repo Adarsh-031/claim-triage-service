@@ -7,7 +7,7 @@ from worker.tools.compensation import compute_compensation
 def cancellation_inputs(**overrides: object) -> dict[str, object]:
     return {
         "notice_minutes_before_departure": 23 * 60,
-        "alternate_or_refund_accepted": False,
+        "alternate_flight_accepted": False,
         "block_time_minutes": 60,
         "one_way_basic_fare_inr": 4000,
         "airline_fuel_charge_inr": 1000,
@@ -27,14 +27,19 @@ def denied_boarding_inputs(**overrides: object) -> dict[str, object]:
 
 # CAR 3.3.2(a): "INR 5,000 or booked one-way basic fare plus airline fuel charge, whichever is less"
 def test_cancellation_tier_a():
-    result = compute_compensation("3.3.2", cancellation_inputs(block_time_minutes=60))
+    result = compute_compensation(
+        "3.3.2",
+        cancellation_inputs(block_time_minutes=60, one_way_basic_fare_inr=7000, airline_fuel_charge_inr=1000),
+    )
     assert (result.amount, result.clause_id) == (5000, "3.3.2(a)")
 
 
 # CAR 3.3.2(b): "INR 7,500 or booked one-way basic fare plus airline fuel charge, whichever is less"
 def test_cancellation_tier_b():
-    result = compute_compensation("3.3.2", cancellation_inputs(block_time_minutes=61))
-    assert (result.amount, result.clause_id) == (5000, "3.3.2(b)")
+    result = compute_compensation(
+        "3.3.2", cancellation_inputs(block_time_minutes=61, one_way_basic_fare_inr=10_000, airline_fuel_charge_inr=0)
+    )
+    assert (result.amount, result.clause_id) == (7500, "3.3.2(b)")
 
 
 # CAR 3.3.2(c): "INR 10,000 or booked one-way basic fare plus airline fuel charge, whichever is less"
@@ -113,7 +118,7 @@ def test_denied_boarding_one_hour_exception_boundary():
 def test_cancellation_notice_at_exactly_two_weeks_requires_3_3_1_arrangement():
     result = compute_compensation(
         "3.3.2",
-        {"notice_minutes_before_departure": 14 * 24 * 60, "alternate_or_refund_accepted": True},
+        {"notice_minutes_before_departure": 14 * 24 * 60, "alternate_flight_accepted": True},
     )
     assert (result.amount, result.clause_id) == (0, "3.3.2")
 
@@ -123,7 +128,7 @@ def test_cancellation_notice_just_under_two_weeks_without_arrangement_uses_3_3_2
         "3.3.2",
         {
             "notice_minutes_before_departure": 14 * 24 * 60 - 1,
-            "alternate_or_refund_accepted": False,
+            "alternate_flight_accepted": False,
             "block_time_minutes": 60,
             "one_way_basic_fare_inr": 4000,
             "airline_fuel_charge_inr": 1000,
@@ -137,17 +142,41 @@ def test_cancellation_notice_at_exactly_24_hours_requires_3_3_1_arrangement():
     result = compute_compensation("3.3.2", cancellation_inputs(notice_minutes_before_departure=24 * 60))
     assert result.amount == 5000
     accepted = compute_compensation(
-        "3.3.2", cancellation_inputs(notice_minutes_before_departure=24 * 60, alternate_or_refund_accepted=True)
+        "3.3.2", cancellation_inputs(notice_minutes_before_departure=24 * 60, alternate_flight_accepted=True)
     )
     assert (accepted.amount, accepted.reason) == (0, "alternate accepted, 3.3.2")
     missing = compute_compensation(
-        "3.3.2", cancellation_inputs(notice_minutes_before_departure=24 * 60, alternate_or_refund_accepted=None)
+        "3.3.2", cancellation_inputs(notice_minutes_before_departure=24 * 60, alternate_flight_accepted=None)
     )
-    assert missing.missing_fields == ("alternate_or_refund_accepted",)
+    assert missing.missing_fields == ("alternate_flight_accepted",)
+
+
+@pytest.mark.parametrize("notice", [0, 14 * 60, 24 * 60, 14 * 24 * 60])
+def test_missing_alternate_acceptance_never_computes_a_payout(notice: int):
+    inputs = cancellation_inputs(notice_minutes_before_departure=notice, alternate_flight_accepted=None)
+    result = compute_compensation("3.3.2", inputs)
+    assert result.status == "needs_evidence"
+    assert result.amount is None
+    assert result.missing_fields == ("alternate_flight_accepted",)
+
+
+def test_refund_taken_does_not_suppress_cancellation_compensation():
+    result = compute_compensation(
+        "3.3.2", cancellation_inputs(alternate_flight_accepted=False, refund_taken=True)
+    )
+    assert (result.amount, result.clause_id) == (5000, "3.3.2(a)")
+    assert result.inputs_used["refund_taken"] is True
+
+
+def test_conflicting_accepted_alternate_and_refund_facts_are_rejected():
+    with pytest.raises(ValueError, match="cannot both be true"):
+        compute_compensation(
+            "3.3.2", cancellation_inputs(alternate_flight_accepted=True, refund_taken=True)
+        )
 
 
 def test_alternate_accepted_demo_returns_zero_with_requested_reason():
-    result = compute_compensation("3.3.2", {"alternate_or_refund_accepted": True})
+    result = compute_compensation("3.3.2", {"alternate_flight_accepted": True})
     assert (result.amount, result.reason, result.clause_id) == (0, "alternate accepted, 3.3.2", "3.3.2")
 
 

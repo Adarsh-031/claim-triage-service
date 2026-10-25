@@ -15,13 +15,15 @@ Part IV, Revision 4 text in `tests/fixtures/car-s3-m-iv-r4.layout.txt`.
 ## Cancellation — CAR 3.3.2
 
 Compensation is available only when the passenger was not informed in accordance
-with 3.3.1. The 3.3.1 arrangements depend on notice: at least two weeks, the airline must inform
-the passenger and arrange an acceptable alternate flight/refund; under two weeks and
-up to 24 hours, it must offer an alternate or refund acceptable to the passenger. The
-calculator requires `notice_minutes_before_departure` and (at or beyond 24 hours)
-`alternate_or_refund_accepted`; it never infers that the carrier complied from notice
-time alone. An accepted alternate or refund returns zero with reason
-`alternate accepted, 3.3.2`.
+with 3.3.1. The 3.3.1 arrangements depend on notice: at least two weeks, the airline
+must inform the passenger and arrange an acceptable alternate flight/refund; under
+two weeks and up to 24 hours, it must offer an alternate or refund acceptable to the
+passenger. The calculator requires `alternate_flight_accepted` at every notice level;
+a missing value returns `needs_evidence`. `refund_taken` is a separate input and does
+not reduce or suppress the compensation amount: a passenger who takes the refund
+remains eligible for the 3.3.2 compensation tier. Only an accepted alternate returns
+zero, with reason `alternate accepted, 3.3.2`. Notice is also required to compute a
+tier, and missing facts are never inferred from notice time alone.
 
 | Block time | Compensation | Clause |
 | --- | --- | --- |
@@ -30,7 +32,9 @@ time alone. An accepted alternate or refund returns zero with reason
 | More than 2 hours | Lesser of INR 10,000 or booked one-way basic fare plus airline fuel charge | 3.3.2(c) |
 
 The full ticket refund mentioned in 3.3.2 is a separate entitlement; this function's
-`amount` is the compensation amount only.
+`amount` is the compensation amount only. Same-ticket missed connections are a second
+3.3.2 trigger but are currently out of scope because the claim contract lacks the
+original and connecting flight facts.
 
 ## Denied boarding — CAR 3.2.2
 

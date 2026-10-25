@@ -106,10 +106,7 @@ def _zero(clause_id: str, reason: str, inputs_used: dict[str, Any]) -> Compensat
     )
 
 
-def _base_fare(inputs: dict[str, Any], required: list[str]) -> tuple[Decimal, dict[str, Any]] | CompensationResult:
-    missing = [key for key in required if inputs.get(key) is None]
-    if missing:
-        return _needs_evidence("", *missing)
+def _base_fare(inputs: dict[str, Any]) -> tuple[Decimal, dict[str, Any]]:
     basic = _money(inputs["one_way_basic_fare_inr"], "one_way_basic_fare_inr")
     fuel = _money(inputs["airline_fuel_charge_inr"], "airline_fuel_charge_inr")
     return basic + fuel, {
@@ -120,25 +117,30 @@ def _base_fare(inputs: dict[str, Any], required: list[str]) -> tuple[Decimal, di
 
 def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
     clause = "3.3.2"
-    notice = inputs.get("notice_minutes_before_departure")
-    accepted = inputs.get("alternate_or_refund_accepted")
+    alternate_accepted = inputs.get("alternate_flight_accepted")
+    if alternate_accepted is None:
+        return _needs_evidence(clause, "alternate_flight_accepted")
+    alternate_accepted = _boolean(alternate_accepted, "alternate_flight_accepted")
 
-    if accepted is not None and not isinstance(accepted, bool):
-        raise ValueError("alternate_or_refund_accepted must be a boolean")
-    if accepted is True:
-        return _zero(
-            clause,
-            "alternate accepted, 3.3.2",
-            {"alternate_or_refund_accepted": True},
-        )
+    refund_taken = inputs.get("refund_taken")
+    if refund_taken is not None:
+        refund_taken = _boolean(refund_taken, "refund_taken")
+    if alternate_accepted and refund_taken:
+        raise ValueError("alternate_flight_accepted and refund_taken cannot both be true")
+
+    used: dict[str, Any] = {"alternate_flight_accepted": alternate_accepted}
+    if refund_taken is not None:
+        used["refund_taken"] = refund_taken
+    if alternate_accepted:
+        return _zero(clause, "alternate accepted, 3.3.2", used)
+
+    notice = inputs.get("notice_minutes_before_departure")
     if notice is None:
         return _needs_evidence(clause, "notice_minutes_before_departure")
     notice = _integer(notice, "notice_minutes_before_departure")
 
-    # CAR 3.3.1 requires an acceptable alternate or refund at both notice thresholds.
-    # At exactly 24 h and exactly 2 weeks, the rule still applies; require evidence.
-    if notice >= 24 * 60 and accepted is None:
-        return _needs_evidence(clause, "alternate_or_refund_accepted")
+    # CAR 3.3.1 requires an acceptable alternate/refund at 24 hours and two weeks.
+    # The acceptance fact is required at every notice level; never infer it.
     needed = [
         key
         for key in ("block_time_minutes", "one_way_basic_fare_inr", "airline_fuel_charge_inr")
@@ -148,25 +150,23 @@ def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
         return _needs_evidence(clause, *needed)
 
     block = _integer(inputs["block_time_minutes"], "block_time_minutes")
-    fare_total_result = _base_fare(inputs, ["one_way_basic_fare_inr", "airline_fuel_charge_inr"])
-    assert not isinstance(fare_total_result, CompensationResult)
-    fare_total, fare_inputs = fare_total_result
+    fare_total, fare_inputs = _base_fare(inputs)
 
     # CAR 3.3.2(a)-(c): inclusive upper band edges at 60 and 120 minutes.
-    for upper, cap, tier_clause in CANCELLATION_TIERS:
-        if upper is None or block <= upper:
-            return _computed(
-                amount=min(cap, fare_total),
-                formula=f"min(INR {cap}, booked one-way basic fare + airline fuel charge)",
-                clause_id=tier_clause,
-                inputs_used={
-                    "notice_minutes_before_departure": notice,
-                    "alternate_or_refund_accepted": accepted,
-                    "block_time_minutes": block,
-                    **fare_inputs,
-                },
-            )
-    raise AssertionError("unreachable cancellation tier")
+    upper, cap, tier_clause = next(
+        tier for tier in CANCELLATION_TIERS if tier[0] is None or block <= tier[0]
+    )
+    return _computed(
+        amount=min(cap, fare_total),
+        formula=f"min(INR {cap}, booked one-way basic fare + airline fuel charge)",
+        clause_id=tier_clause,
+        inputs_used={
+            "notice_minutes_before_departure": notice,
+            **used,
+            "block_time_minutes": block,
+            **fare_inputs,
+        },
+    )
 
 
 def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
@@ -194,9 +194,7 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
     ]
     if missing:
         return _needs_evidence(clause, *missing)
-    fare_total_result = _base_fare(inputs, ["one_way_basic_fare_inr", "airline_fuel_charge_inr"])
-    assert not isinstance(fare_total_result, CompensationResult)
-    fare_total, fare_inputs = fare_total_result
+    fare_total, fare_inputs = _base_fare(inputs)
     used: dict[str, Any] = {"alternate_arranged": alternate, **fare_inputs}
 
     if not alternate:
@@ -269,8 +267,10 @@ def compute_compensation(clause_id: str, inputs: dict[str, Any]) -> Compensation
     """Compute a CAR compensation amount without filling missing facts by guesswork.
 
     ``clause_id`` accepts ``3.3.2`` (cancellation), ``3.2.2`` (denied
-    boarding), or ``3.5``/``3.5.1`` (downgrading). The result's ``clause_id``
-    identifies the specific subparagraph used where the CAR provides one.
+    boarding), or ``3.5``/``3.5.1`` (downgrading). Same-ticket missed
+    connections under 3.3.2 are out of scope because the current claim contract
+    does not carry the original and connecting flight facts. The result's
+    ``clause_id`` identifies the specific subparagraph used where available.
     """
     if not isinstance(inputs, dict):
         raise TypeError("inputs must be a dictionary")
