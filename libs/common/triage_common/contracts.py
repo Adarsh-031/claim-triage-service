@@ -1,14 +1,27 @@
 """Versioned data contracts (D1). Every external interface validates against these."""
 from __future__ import annotations
 
+import unicodedata
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal, TypedDict
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CONTRACT_VERSION = "1.0"
+
+
+def _reject_control_or_zero_width(value: str | None) -> str | None:
+    """Reject non-printing control/format characters while allowing normal multiline text."""
+    if value is None:
+        return value
+    for char in value:
+        category = unicodedata.category(char)
+        # Newline, carriage return, and tab are normal passenger-statement whitespace.
+        if category in {"Cc", "Cf", "Cs"} and char not in {"\\n", "\\r", "\\t"}:
+            raise ValueError("must not contain control or zero-width characters")
+    return value
 
 
 class DisruptionType(StrEnum):
@@ -56,10 +69,17 @@ class ClaimIn(BaseModel):
     ticket_fare_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     statement: str = Field(min_length=10, max_length=4000, description="Passenger's own account")
 
+    @field_validator("statement", "stated_cause")
+    @classmethod
+    def reject_hidden_characters(cls, value: str | None) -> str | None:
+        return _reject_control_or_zero_width(value)
+
     @model_validator(mode="after")
     def cross_field(self) -> ClaimIn:
         if self.origin == self.destination:
             raise ValueError("origin and destination must differ")
+        if self.disruption_type == DisruptionType.cancellation and self.notice_minutes_before_departure is None:
+            raise ValueError("notice_minutes_before_departure is required for cancellation")
         if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
         if (
