@@ -104,7 +104,7 @@ docs/              Requirements, design, report material, runbooks, incident log
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
 | P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing and retrieval checks |
-| P0 | Bounded LangGraph skeleton, cited demo case 4.1 | implemented with offline fixtures; full retrieval/reasoning pending |
+| P0 | Bounded LangGraph skeleton, cited demo case 4.1 | Chroma vector/BM25 retrieval and exact clause lookup implemented; grounding verification/reasoning pending |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
 | P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | service/agent dashboards provisioned; scaling/cache/prompt studies pending |
 

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://triage:triage@postgres:5432/triage"
     chroma_url: str = "http://chroma:8000"
     chroma_collection: str = "triage-clauses-v1"
+    corpus_chunks_path: str = "corpus/processed/chunks.jsonl"
     worker_metrics_port: int = 8002
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
     rate_limit_per_min: int = 30

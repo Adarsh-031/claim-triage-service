@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,14 +9,29 @@ import pytest
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from worker import main as worker_main
 from worker.agent import graph
-from worker.tools.corpus import DEMO_CHUNKS, DEMO_CORPUS_VERSION, search_corpus
+from worker.tools.corpus import CORPUS_VERSION
 
 SCENARIO = json.loads(
     (Path(__file__).parents[1] / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text()
 )
 
 
-def test_s01_returns_valid_cited_result_and_ordered_trace():
+def _sample_chunks():
+    texts = {"3.3.1": "Cancellation may offer an alternate flight or refund.",
+             "3.3.2": "Cancellation compensation and a full refund may apply.",
+             "3.8.1(a)": "Meals and refreshments in relation to waiting time."}
+    return [{"chunk_id": f"CAR-S3-M-IV-R4:{cid}:0001", "doc_id": "CAR-S3-M-IV-R4",
+             "clause_id": cid, "heading_path": ["3 Cancellation"], "text": passage,
+             "hash": hashlib.sha256(passage.encode()).hexdigest(), "page": None, "refs": []}
+            for cid, passage in texts.items()]
+
+
+def _fake_search_result():
+    return {"chunks": _sample_chunks(), "retrieval_error": None}
+
+
+def test_s01_returns_valid_cited_result_and_ordered_trace(monkeypatch):
+    monkeypatch.setattr(graph.search_corpus, "invoke", lambda _args: _fake_search_result())
     run_id = str(uuid4())
     result, trace = graph.run_agent(SCENARIO["claim"], "test-cid", run_id=run_id)
 
@@ -24,13 +40,13 @@ def test_s01_returns_valid_cited_result_and_ordered_trace():
     assert result.route is Route.ESCALATE
     assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
     assert {citation.clause_id for citation in result.citations} == set(SCENARIO["expected"]["must_cite"])
-    chunks = {chunk.chunk_id: chunk for chunk in DEMO_CHUNKS}
+    chunks = {chunk["chunk_id"]: chunk for chunk in _sample_chunks()}
     for citation in result.citations:
         chunk = chunks[citation.chunk_id]
-        assert citation.doc_id == chunk.doc_id
-        assert citation.quote in chunk.text
+        assert citation.doc_id == chunk["doc_id"]
+        assert citation.quote in chunk["text"]
     assert "No claim determination made" in result.summary
-    assert result.corpus_version == DEMO_CORPUS_VERSION
+    assert result.corpus_version == CORPUS_VERSION
     assert [entry["step"] for entry in trace] == ["start", "intake", "research", "verify", "finalize"]
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 3
@@ -64,14 +80,14 @@ def test_search_reaching_time_limit_skips_drafting_and_escalates(monkeypatch):
     now = [100.0]
     monkeypatch.setattr(graph.time, "monotonic", lambda: now[0])
 
-    def slow_search(query):
+    def slow_search(_args):
         now[0] += 60.0
-        return search_corpus(query)
+        return _fake_search_result()
 
     def unexpected_draft(state):
         pytest.fail("drafting must not start after search exhausts the time budget")
 
-    monkeypatch.setattr(graph, "search_corpus", slow_search)
+    monkeypatch.setattr(graph.search_corpus, "invoke", slow_search)
     monkeypatch.setattr(graph, "_stub_draft", unexpected_draft)
     result, trace = graph.run_agent(SCENARIO["claim"])
     assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
@@ -80,7 +96,7 @@ def test_search_reaching_time_limit_skips_drafting_and_escalates(monkeypatch):
 
 def test_tool_limit_prevents_search_and_returns_budget_escalation(monkeypatch):
     search = Mock()
-    monkeypatch.setattr(graph, "search_corpus", search)
+    monkeypatch.setattr(graph.search_corpus, "invoke", search)
     monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     result, trace = graph.run_agent(SCENARIO["claim"])
     assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
@@ -96,16 +112,11 @@ def test_expired_run_skips_all_work_nodes(monkeypatch):
     assert trace[-1]["step_count"] == trace[-1]["tool_calls"] == 0
 
 
-def test_unsupported_claim_escalates_instead_of_making_up_a_decision():
+def test_unsupported_claim_escalates_instead_of_making_up_a_decision(monkeypatch):
+    monkeypatch.setattr(graph.search_corpus, "invoke", lambda _args: {"chunks": [], "retrieval_error": None})
     result, _ = graph.run_agent({**SCENARIO["claim"], "disruption_type": "delay"})
     assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
     assert result.citations == []
-
-
-def test_fixture_search_filters_and_limits():
-    assert len(search_corpus("cancellation", k=2)) == 2
-    assert search_corpus("cancellation", k=0) == []
-    assert search_corpus("cancellation", doc_id="real-source") == []
 
 
 @pytest.mark.parametrize("budget_exhausted", [False, True])
@@ -122,6 +133,7 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         return result, trace
 
     monkeypatch.setattr(worker_main, "run_agent", checked_run_agent)
+    monkeypatch.setattr(graph.search_corpus, "invoke", lambda _args: _fake_search_result())
     if budget_exhausted:
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     worker_main.handle({"run_id": str(run_id), "cid": "worker-test"})
@@ -142,8 +154,8 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
 
 @pytest.mark.parametrize(("used", "invoked", "reserved"), [(13, True, 14), (14, False, 15), (15, False, 15)])
 def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, invoked, reserved):
-    search = Mock(return_value=search_corpus("cancellation"))
-    monkeypatch.setattr(graph, "search_corpus", search)
+    search = Mock(return_value=_fake_search_result())
+    monkeypatch.setattr(graph.search_corpus, "invoke", search)
     state = {
         "claim": SCENARIO["claim"], "facts": {"disruption_type": "cancellation"},
         "started_at": graph.time.monotonic(), "step_count": 2, "tool_calls": used,
@@ -172,6 +184,7 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
                 "escalation_reason": None, "amount": 1000}
 
     monkeypatch.setattr(graph, "_stub_draft", consequential_draft)
+    monkeypatch.setattr(graph.search_corpus, "invoke", lambda _args: _fake_search_result())
     updates = []
     run_id = uuid4()
     monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))

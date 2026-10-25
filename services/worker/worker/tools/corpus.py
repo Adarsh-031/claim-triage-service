@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from functools import lru_cache
@@ -14,15 +15,15 @@ from pathlib import Path
 from typing import Literal
 
 import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from langchain_core.tools import tool
-from rank_bm25 import BM25Okapi
 from triage_common.contracts import Chunk
 from triage_common.settings import settings
 
 log = logging.getLogger(__name__)
 CORPUS_VERSION = "processed-chunks-v1"
 ERROR_KEY = "retrieval_error"
-DEFAULT_CHUNKS_PATH = Path("corpus/processed/chunks.jsonl")
+DEFAULT_CHUNKS_PATH = Path(settings.corpus_chunks_path)
 
 
 def _tokens(text: str) -> list[str]:
@@ -56,9 +57,14 @@ def load_chunks(path: Path = DEFAULT_CHUNKS_PATH) -> list[dict]:
 @lru_cache(maxsize=1)
 def _bm25_index(path_text: str, mtime_ns: int, size: int):
     chunks = load_chunks(Path(path_text))
-    tokens = [_tokens(" ".join([chunk["clause_id"], *chunk.get("heading_path", []), chunk["text"]]))
-              for chunk in chunks]
-    return chunks, BM25Okapi(tokens)
+    documents = [_tokens(" ".join([chunk["clause_id"], *chunk.get("heading_path", []), chunk["text"]]))
+                 for chunk in chunks]
+    document_frequency: dict[str, int] = {}
+    for tokens in documents:
+        for token in set(tokens):
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+    average_length = sum(map(len, documents)) / max(len(documents), 1)
+    return chunks, documents, document_frequency, average_length
 
 
 def _metadata_value(value):
@@ -83,7 +89,7 @@ def _normalize_chroma(ids: list[str], documents: list[str], metadatas: list[dict
             "heading_path": _metadata_value(metadata.get("heading_path", [])) or [],
             "text": text,
             "score": 0.0,
-            "page": metadata.get("page", None),
+            "page": (int(metadata["page"]) if metadata.get("page") is not None and int(metadata["page"]) > 0 else None),
             "refs": _metadata_value(metadata.get("refs", [])) or [],
             "hash": metadata.get("hash", ""),
         })
@@ -92,7 +98,7 @@ def _normalize_chroma(ids: list[str], documents: list[str], metadatas: list[dict
 
 def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
     client = chromadb.HttpClient(host=settings.chroma_url)
-    collection = client.get_collection(settings.chroma_collection)
+    collection = client.get_collection(settings.chroma_collection, embedding_function=DefaultEmbeddingFunction())
     kwargs = {"query_texts": [query], "n_results": k, "include": ["documents", "metadatas", "distances"]}
     if doc_id:
         kwargs["where"] = {"doc_id": doc_id}
@@ -112,8 +118,27 @@ def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
 def _bm25_search(query: str, k: int, doc_id: str | None) -> list[dict]:
     path = DEFAULT_CHUNKS_PATH
     stat = path.stat()
-    chunks, index = _bm25_index(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
-    scores = index.get_scores(_tokens(query))
+    chunks, documents, document_frequency, average_length = _bm25_index(
+        str(path.resolve()), stat.st_mtime_ns, stat.st_size
+    )
+    query_tokens = _tokens(query)
+    count = len(documents)
+    k1, b = 1.5, 0.75
+    scores: list[float] = []
+    for tokens in documents:
+        frequencies = {token: tokens.count(token) for token in set(tokens)}
+        score = 0.0
+        length_norm = k1 * (1 - b + b * len(tokens) / max(average_length, 1))
+        for token in query_tokens:
+            frequency = frequencies.get(token, 0)
+            if not frequency:
+                continue
+            inverse_frequency = max(0.0, math.log(
+                1 + (count - document_frequency.get(token, 0) + 0.5)
+                / (document_frequency.get(token, 0) + 0.5)
+            ))
+            score += inverse_frequency * frequency * (k1 + 1) / (frequency + length_norm)
+        scores.append(score)
     ranked = sorted(enumerate(scores), key=lambda pair: (-float(pair[1]), chunks[pair[0]]["chunk_id"]))
     output = []
     for index_position, score in ranked:
@@ -191,8 +216,9 @@ def _get_clause_impl(clause_id: str, doc_id: str = "CAR-S3-M-IV-R4") -> dict:
     if not clause_id.strip() or not doc_id.strip():
         return {"chunk": None, ERROR_KEY: "clause_id and doc_id are required"}
     try:
+        chunks = _within_timeout(load_chunks, DEFAULT_CHUNKS_PATH)
         matches = [
-            chunk for chunk in load_chunks()
+            chunk for chunk in chunks
             if chunk["clause_id"].casefold() == clause_id.strip().casefold()
             and chunk["doc_id"] == doc_id.strip()
         ]
@@ -201,6 +227,9 @@ def _get_clause_impl(clause_id: str, doc_id: str = "CAR-S3-M-IV-R4") -> dict:
         # Exact clause lookup is deterministic even where a corpus has multiple views.
         matches.sort(key=lambda chunk: chunk["chunk_id"])
         return {"chunk": matches[0], ERROR_KEY: None}
+    except (TimeoutError, FutureTimeout) as exc:
+        log.warning("clause lookup timed out: %s", exc)
+        return {"chunk": None, ERROR_KEY: "timeout"}
     except Exception as exc:
         log.warning("clause lookup failed (%s): %s", type(exc).__name__, exc)
         return {"chunk": None, ERROR_KEY: "unavailable"}

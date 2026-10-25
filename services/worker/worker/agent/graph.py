@@ -1,6 +1,6 @@
-"""Bounded, offline LangGraph skeleton for issue #6.
+"""Bounded LangGraph skeleton using processed chunks and Chroma retrieval.
 
-The corpus and drafting step are fixtures; verification is deliberately pass-through.
+Retrieval uses the processed corpus/Chroma index; verification remains pass-through.
 Finalization is outside the work-step budget so exhaustion always yields a Result.
 """
 from __future__ import annotations
@@ -97,12 +97,13 @@ def research(state: RunState) -> RunState:
             "k": 5,
             "mode": "vector",
         })
+    state.setdefault("retrieved", [])
+    retrieved_chunks = retrieval.get("chunks", [])
+    # Append successful results so later verification sees evidence from every call.
+    if retrieved_chunks:
+        state["retrieved"] = [*state.get("retrieved", []), *retrieved_chunks]
     if retrieval.get("retrieval_error"):
-        state["retrieved"] = []
         state["errors"] = [*state.get("errors", []), str(retrieval["retrieval_error"])]
-    else:
-        # Keep actual retrieved passages in graph state for future quote verification.
-        state["retrieved"] = retrieval.get("chunks", [])
     if not _budget_exceeded(state) and not retrieval.get("retrieval_error"):
         state["draft"] = _stub_draft(state)
     _log(state, "research", n=len(state["retrieved"]), tool_calls=state["tool_calls"],
@@ -118,7 +119,7 @@ def verify(state: RunState) -> RunState:
 
 
 def route_fn(state: RunState) -> str:
-    if state.get("budget_exceeded"):
+    if state.get("budget_exceeded") or state.get("errors"):
         return "finalize"
     # A fake research node can withhold its draft to exercise bounded retries.
     return "verify" if state.get("draft") else "research"

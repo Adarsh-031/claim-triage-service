@@ -4181,7 +4181,9 @@ name = "triage-worker"
 version = "0.1.0"
 source = { editable = "services/worker" }
 dependencies = [
+    { name = "chromadb" },
     { name = "httpx" },
+    { name = "langchain-core" },
     { name = "langgraph" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
@@ -4192,7 +4194,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "chromadb", specifier = "==1.5.3" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "langchain-core", specifier = ">=0.3" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.25" },
     { name = "opentelemetry-sdk", specifier = ">=1.25" },

@@ -1,6 +1,5 @@
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 from langchain_core.tools import BaseTool
@@ -77,7 +76,7 @@ def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
             seen.update(kwargs)
             return {
                 "ids": [["CAR-S3-M-IV-R4:3.3.2:0001"]],
-                "documents": [["CAR-S3-M-IV-R4 > 3 Cancellation\\nCancellation compensation."]],
+                "documents": [["CAR-S3-M-IV-R4 > 3 Cancellation\nCancellation compensation."]],
                 "metadatas": [[{
                     "doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2",
                     "heading_path": json.dumps(["3 Cancellation"]), "hash": "abc", "refs": "[]",
@@ -85,7 +84,7 @@ def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
                 "distances": [[0.1]],
             }
     class FakeClient:
-        def get_collection(self, name):
+        def get_collection(self, name, **kwargs):
             assert name == corpus.settings.chroma_collection
             return FakeCollection()
     monkeypatch.setattr(corpus.chromadb, "HttpClient", lambda **kwargs: FakeClient())

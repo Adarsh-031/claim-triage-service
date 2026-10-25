@@ -21,6 +21,10 @@ services:
   worker:
     build: { context: ., dockerfile: services/worker/Dockerfile }
     <<: *app-env
+    environment:
+      CORPUS_CHUNKS_PATH: /src/corpus/processed/chunks.jsonl
+    volumes:
+      - ./corpus:/src/corpus:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
