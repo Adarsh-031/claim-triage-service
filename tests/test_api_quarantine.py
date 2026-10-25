@@ -190,3 +190,17 @@ def test_cross_field_validation_error_is_reported_against_destination(monkeypatc
     assert isinstance(stored[0], api.Quarantine)
     assert fake_redis.incr_calls == 0
     assert fake_redis.lpush_calls == []
+
+
+
+def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    claim = demo_claim()
+    claim["statement"] = "✈" * 7_000
+
+    response = client.post("/v1/claims", json=claim)
+
+    assert response.status_code == 422
+    assert len(stored) == 1
+    assert len(stored[0].raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
