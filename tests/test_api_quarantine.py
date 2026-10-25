@@ -222,3 +222,52 @@ def test_invalid_claims_are_rate_limited_before_quarantine(monkeypatch):
     assert stored == []
     assert fake_redis.expire_calls == 1
     assert fake_redis.lpush_calls == []
+
+
+def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from worker import main as worker
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    stored = []
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    monkeypatch.setattr(worker, "get_run", lambda _: stored[0])
+    updates = []
+    monkeypatch.setattr(worker, "update_run", lambda *args, **kwargs: updates.append(kwargs))
+    response = client.post("/v1/claims", json=demo_claim(), headers={
+        "traceparent": "00-12345678901234567890123456789012-1234567890123456-01",
+        "x-correlation-id": "trace-test",
+    })
+    assert response.status_code == 202
+    job = json.loads(fake_redis.lpush_calls[0][1])
+    assert "traceparent" in job["trace_context"]
+    worker.handle(job)
+    spans = exporter.get_finished_spans()
+    publish = next(span for span in spans if span.name == "queue.publish")
+    consume = next(span for span in spans if span.name == "queue.process")
+    assert consume.context.trace_id == publish.context.trace_id == int("12345678901234567890123456789012", 16)
+    assert consume.parent.span_id == publish.context.span_id
+    assert consume.attributes["run_id"] == response.json()["run_id"]
+    assert consume.attributes["correlation_id"] == "trace-test"
+    for name in ["agent.intake", "agent.research", "agent.verify", "agent.finalize", "tool.search_corpus"]:
+        assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
+    assert updates[-1]["status"] == "escalated"
+    assert "pnr" not in str([dict(s.attributes) for s in spans])
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(worker, "run_agent", fail)
+    worker.handle({"run_id": job["run_id"], "cid": "legacy-job"})
+    failed_span = [s for s in exporter.get_finished_spans() if s.name == "queue.process"][-1]
+    assert failed_span.status.status_code == trace.StatusCode.ERROR
+    assert any(event.name == "exception" for event in failed_span.events)
+    assert updates[-1]["result"]["escalation_reason"] == "PROVIDER_DEGRADED"

@@ -31,10 +31,9 @@ See [the graph skeleton guide](docs/agent-graph.md) for the offline demo and bud
 See [the ingestion guide](docs/ingestion.md) for artifact formats, reference resolution, and tests.
 
 For production-like troubleshooting, see the [operational runbooks](docs/runbooks.md) and
-[incident log](docs/incident-log.md). The runbooks call out features that are not implemented yet,
-including Chroma indexing and the separate verifier worker (tracked in
-[issue #21](https://github.com/Adarsh-031/claim-triage-service/issues/21) and
-[issue #6](https://github.com/Adarsh-031/claim-triage-service/issues/6), respectively).
+[incident log](docs/incident-log.md). The runbooks include Chroma repair/retrieval checks, Grafana dashboards, and correlated
+API/worker traces. The separate verifier remains tracked in
+[issue #6](https://github.com/Adarsh-031/claim-triage-service/issues/6).
 
 Run the stack:
 
@@ -46,7 +45,8 @@ curl -i localhost:8000/readyz
 ```
 
 The first startup downloads the DGCA CAR PDF and checks its SHA-256 against the corpus manifest. The one-shot
-`ingest` service completes before the worker starts. In `docker compose ps`, long-running services should be healthy
+`ingest` service builds and indexes 246 chunks, then verifies known retrieval before
+the worker starts. Its first run downloads MiniLM weights into a persistent cache. In `docker compose ps`, long-running services should be healthy
 and `ingest` should show `Exited (0)`. The readiness request should return HTTP 200.
 
 ## Services and ports
@@ -73,7 +73,11 @@ curl -s -X POST localhost:8000/v1/claims -H 'content-type: application/json' \
 curl -s localhost:8000/v1/runs/<run_id> | jq
 ```
 
-Scale workers: `docker compose up --scale worker=3`
+Verify indexing: `docker compose run --rm --no-deps ingest python cli/index_corpus.py --verify`.
+Verify correlated traces: `uv run python scripts/smoke_observability.py`.
+Grafana provisions **Triage — Services** and **Triage — Agents** in the **Claim Triage** folder.
+
+Scale workers: `docker compose up --scale worker=3`; Prometheus discovers each replica.
 
 PostgreSQL's initialization script runs only when its data volume is empty. After changing the database schema for this
 demo, recreate the local database volume with `docker compose down -v` before starting the stack again. This deletes
@@ -99,10 +103,10 @@ docs/              Requirements, design, report material, runbooks, incident log
 | Priority | Item | State |
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
-| P0 | Clause chunks + reference/definition exports | implemented; embedding/indexing pending |
+| P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing and retrieval checks |
 | P0 | Bounded LangGraph skeleton, cited demo case 4.1 | implemented with offline fixtures; full retrieval/reasoning pending |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
-| P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | TODO; runbooks documented with current limitations |
+| P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | service/agent dashboards provisioned; scaling/cache/prompt studies pending |
 
 ## Configuration
 

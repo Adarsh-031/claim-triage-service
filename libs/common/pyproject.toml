@@ -2,7 +2,7 @@
 name = "triage-common"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.7", "pydantic-settings>=2.3", "sqlalchemy>=2.0", "psycopg[binary]>=3.1"]
+dependencies = ["pydantic>=2.7", "pydantic-settings>=2.3", "sqlalchemy>=2.0", "psycopg[binary]>=3.1", "opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp>=1.25"]
 
 [build-system]
 requires = ["hatchling"]
