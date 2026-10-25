@@ -5,10 +5,12 @@ disruption type. Research makes one search against three hand-written in-memory 
 then uses a deterministic in-process drafting stub. Verification passes the draft through
 and leaves `verified=False`; a separate grounding verifier is future work.
 
-The demo cancellation/accepted-alternate pattern in scenario s01 returns a decline with
-citations to `3.3.1`, `3.3.2`, and `3.8.1(a)`, plus a summary noting meals and refreshments.
-Other patterns escalate with `OUT_OF_CORPUS`. This is fixture behavior, not a complete
-implementation of the regulatory decision rules.
+Scenario s01 returns `ESCALATE` with `VERIFICATION_FAILED` and fixture citations to
+`3.3.1`, `3.3.2`, and `3.8.1(a)`. No claim determination or entitlement is asserted.
+Claims with no retrieved fixture evidence escalate with `OUT_OF_CORPUS`. Finalization
+also replaces any non-escalation draft with `VERIFICATION_FAILED` until grounding
+verification is implemented, so a substituted draft cannot publish a decline or payment
+through the worker/API.
 
 Fixture chunk/document IDs start with `DEMO-CAR`, and `corpus_version` is `demo-fixture-v1`.
 The texts are hand-written summaries, not authoritative source quotes. Each citation quotes
@@ -21,12 +23,18 @@ The existing provider interface remains available for the future reasoning imple
 Defaults are 12 work steps, 15 retrieval-tool calls, and 60 elapsed seconds. The graph
 checks for exhaustion before and after each work node and before finalization. Reaching
 any threshold produces an `ESCALATE` result with `BUDGET_EXCEEDED`, taking precedence over
-a draft. A search that exhausts the tool/time budget skips drafting. A research node that
-returns no draft loops until a budget is exhausted.
+a draft. Work steps and tool calls reserve a counter slot before executing. If that
+reservation reaches the threshold, execution is skipped and the run finalizes. For example,
+a tool counter of 14 reserves slot 15 and escalates without calling search; an existing
+counter of 15 also skips search without incrementing again. With a threshold of 15, at
+most 14 searches execute. This intentionally treats the threshold as an exhaustion boundary.
+A search that exhausts the time budget skips drafting. A research node that returns no
+draft loops until a budget is exhausted.
 
-`step_count` counts intake, research, and verify executions, including research retries.
+`step_count` counts reservations for intake, research, and verify, including retries and
+the terminal reservation that skips execution.
 Finalization is outside the work-step budget so it can always construct a valid result.
-`tool_calls` counts searches, not drafting. Elapsed time uses a monotonic clock, unaffected
+`tool_calls` counts search reservations (including the terminal skipped call), not drafting. Elapsed time uses a monotonic clock, unaffected
 by system clock adjustments. These are cooperative checks between operations; they do
 not interrupt a blocked tool call. Future external tools/providers must also enforce their
 own call timeouts.
@@ -50,4 +58,6 @@ the public response format as part of a graph skeleton issue.
 
 Tests cover s01 and citation resolution, exact step/tool limits with a looping fake node,
 the 60-second deadline using a fake clock, exhausted entry budgets, unsupported claims,
-and the worker's completion/escalation persistence path.
+and the worker's escalation persistence path. Regression tests spy on search to prove
+it is skipped at the reservation boundary and inject consequential drafts to prove they
+cannot reach the persisted API payload.

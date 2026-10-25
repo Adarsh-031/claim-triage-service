@@ -43,7 +43,8 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
         if _budget_exceeded(state):
             return state
         state["step_count"] = state.get("step_count", 0) + 1
-        state = node(state)
+        if not _budget_exceeded(state):
+            state = node(state)
         _budget_exceeded(state)
         return state
 
@@ -57,36 +58,35 @@ def intake(state: RunState) -> RunState:
 
 
 def _stub_draft(state: RunState) -> dict:
-    """Deterministic stand-in for an LLM; only the demo pattern is decided."""
+    """Deterministic cited stub; fixture evidence cannot determine a real claim."""
     citations = [Citation(
         chunk_id=chunk["chunk_id"], doc_id=chunk["doc_id"],
         clause_id=chunk["clause_id"], quote=chunk["text"],
     ).model_dump(mode="json") for chunk in state["retrieved"]]
-    claim = state["claim"]
-    alternate = claim.get("alternate") or {}
-    if (
-        claim.get("disruption_type") == "cancellation"
-        and alternate.get("offered") is True
-        and alternate.get("accepted") is True
-        and claim.get("reported_at_airport") is True
-        and citations
-    ):
-        return {
-            "route": Route.DECLINE,
-            "summary": "Demo stub: decline cancellation compensation after an accepted alternate flight; "
-                       "meals_and_refreshments are owed during the airport wait. Human review required.",
-            "citations": citations,
-        }
     return {
         "route": Route.ESCALATE,
-        "summary": "Demo skeleton cannot decide this claim. Routed to a human officer.",
-        "escalation_reason": EscalationReason.OUT_OF_CORPUS,
+        "summary": "Fixture passages retrieved; grounding verification is not implemented. "
+                   "No claim determination made. Human review required." if citations else
+                   "Demo skeleton cannot decide this claim. Routed to a human officer.",
+        "escalation_reason": (EscalationReason.VERIFICATION_FAILED if citations
+                              else EscalationReason.OUT_OF_CORPUS),
         "citations": citations,
     }
 
 
-def research(state: RunState) -> RunState:
+def _reserve_tool_call(state: RunState) -> bool:
+    """Reserve a slot and reject it if the reservation reaches a hard budget."""
+    if _budget_exceeded(state):
+        return False
     state["tool_calls"] = state.get("tool_calls", 0) + 1
+    # Counts reservations, including the terminal slot. No tool side effects
+    # may begin with the counter at the configured exhaustion threshold.
+    return not _budget_exceeded(state)
+
+
+def research(state: RunState) -> RunState:
+    if not _reserve_tool_call(state):
+        return state
     state["retrieved"] = search_corpus(str(state["facts"]["disruption_type"]))
     # Do not start drafting if the search consumed the remaining time/tool budget.
     if not _budget_exceeded(state):
@@ -123,6 +123,16 @@ def finalize(state: RunState) -> RunState:
             "route": Route.ESCALATE,
             "summary": "No draft produced. Routed to a human officer.",
             "escalation_reason": EscalationReason.VERIFICATION_FAILED,
+        }
+    elif draft.get("route") != Route.ESCALATE:
+        # Until grounding verification exists, even an injected/replaced draft
+        # must never publish a consequential route through the worker/API.
+        draft = {
+            "route": Route.ESCALATE,
+            "summary": "Grounding verification is not implemented. No claim determination made. "
+                       "Routed to a human officer.",
+            "escalation_reason": EscalationReason.VERIFICATION_FAILED,
+            "citations": draft.get("citations", []),
         }
     result = Result(
         **draft, run_id=state["run_id"], prompt_version=state["prompt_version"],

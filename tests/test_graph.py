@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -20,14 +21,15 @@ def test_s01_returns_valid_cited_result_and_ordered_trace():
 
     assert Result.model_validate_json(result.model_dump_json()) == result
     assert str(result.run_id) == run_id
-    assert result.route is Route.DECLINE
+    assert result.route is Route.ESCALATE
+    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
     assert {citation.clause_id for citation in result.citations} == set(SCENARIO["expected"]["must_cite"])
     chunks = {chunk.chunk_id: chunk for chunk in DEMO_CHUNKS}
     for citation in result.citations:
         chunk = chunks[citation.chunk_id]
         assert citation.doc_id == chunk.doc_id
         assert citation.quote in chunk.text
-    assert "meals_and_refreshments" in result.summary
+    assert "No claim determination made" in result.summary
     assert result.corpus_version == DEMO_CORPUS_VERSION
     assert [entry["step"] for entry in trace] == ["start", "intake", "research", "verify", "finalize"]
     assert trace[0]["cid"] == "test-cid"
@@ -54,7 +56,7 @@ def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
     assert result.route is Route.ESCALATE
     assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
     assert trace[-1]["step"] == "finalize"
-    assert len(calls) == (11 if budget == "steps" else 15)
+    assert len(calls) == (10 if budget == "steps" else 15)
     assert trace[-1]["step_count" if budget == "steps" else "tool_calls"] == (12 if budget == "steps" else 15)
 
 
@@ -76,11 +78,14 @@ def test_search_reaching_time_limit_skips_drafting_and_escalates(monkeypatch):
     assert [entry["step"] for entry in trace] == ["start", "intake", "research", "finalize"]
 
 
-def test_tool_limit_takes_precedence_over_successful_demo(monkeypatch):
+def test_tool_limit_prevents_search_and_returns_budget_escalation(monkeypatch):
+    search = Mock()
+    monkeypatch.setattr(graph, "search_corpus", search)
     monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     result, trace = graph.run_agent(SCENARIO["claim"])
     assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
     assert trace[-1]["tool_calls"] == 1
+    search.assert_not_called()
 
 
 def test_expired_run_skips_all_work_nodes(monkeypatch):
@@ -124,11 +129,60 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     assert updates[0] == (run_id, {"status": RunStatus.running.value})
     final = updates[-1][1]
     rec = Recommendation.model_validate(final["result"])
-    assert final["status"] == ("escalated" if budget_exhausted else "completed")
+    assert final["status"] == "escalated"
     assert rec.requires_human_approval is True
     assert rec.verified is False
     if budget_exhausted:
         assert rec.escalation_reason is EscalationReason.BUDGET_EXCEEDED
     else:
-        assert rec.route is Route.DECLINE
+        assert rec.route is Route.ESCALATE
+        assert rec.escalation_reason is EscalationReason.VERIFICATION_FAILED
         assert rec.citations
+
+
+@pytest.mark.parametrize(("used", "invoked", "reserved"), [(13, True, 14), (14, False, 15), (15, False, 15)])
+def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, invoked, reserved):
+    search = Mock(return_value=search_corpus("cancellation"))
+    monkeypatch.setattr(graph, "search_corpus", search)
+    state = {
+        "claim": SCENARIO["claim"], "facts": {"disruption_type": "cancellation"},
+        "started_at": graph.time.monotonic(), "step_count": 2, "tool_calls": used,
+    }
+    graph.research(state)
+    assert search.call_count == int(invoked)
+    assert state["tool_calls"] == reserved
+    assert state.get("budget_exceeded", False) is (not invoked)
+
+
+def test_terminal_step_reservation_skips_node_side_effects():
+    node = Mock()
+    state = {"started_at": graph.time.monotonic(), "step_count": 11, "tool_calls": 0}
+    out = graph._bounded(node)(state)
+    node.assert_not_called()
+    assert out["step_count"] == 12
+    assert out["budget_exceeded"] is True
+
+
+@pytest.mark.parametrize("route", [Route.DECLINE, Route.PAY, Route.REQUEST_EVIDENCE])
+def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, route):
+    original_stub = graph._stub_draft
+
+    def consequential_draft(state):
+        return {**original_stub(state), "route": route, "summary": "Unverified decision",
+                "escalation_reason": None, "amount": 1000}
+
+    monkeypatch.setattr(graph, "_stub_draft", consequential_draft)
+    updates = []
+    run_id = uuid4()
+    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append(update))
+    worker_main.handle({"run_id": str(run_id)})
+    saved = updates[-1]
+    rec = Recommendation.model_validate(saved["result"])
+    assert saved["status"] == "escalated"
+    assert rec.route is Route.ESCALATE
+    assert rec.escalation_reason is EscalationReason.VERIFICATION_FAILED
+    assert rec.compensation_inr is None
+    assert rec.verified is False
+    assert rec.summary != "Unverified decision"
+    assert rec.citations
