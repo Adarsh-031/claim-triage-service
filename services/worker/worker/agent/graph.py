@@ -16,7 +16,7 @@ from triage_common.contracts import Citation, EscalationReason, Result, Route, R
 from triage_common.settings import settings
 
 from ..metrics import NODE_LATENCY
-from ..tools.corpus import DEMO_CORPUS_VERSION, search_corpus
+from ..tools.corpus import CORPUS_VERSION, search_corpus
 
 PROMPT_VERSION = "skeleton-v1"
 
@@ -69,9 +69,9 @@ def _stub_draft(state: RunState) -> dict:
     ).model_dump(mode="json") for chunk in state["retrieved"]]
     return {
         "route": Route.ESCALATE,
-        "summary": "Fixture passages retrieved; grounding verification is not implemented. "
+        "summary": "Indexed passages retrieved; grounding verification is not implemented. "
                    "No claim determination made. Human review required." if citations else
-                   "Demo skeleton cannot decide this claim. Routed to a human officer.",
+                   "No indexed evidence was retrieved. Routed to a human officer.",
         "escalation_reason": (EscalationReason.VERIFICATION_FAILED if citations
                               else EscalationReason.OUT_OF_CORPUS),
         "citations": citations,
@@ -92,11 +92,21 @@ def research(state: RunState) -> RunState:
     if not _reserve_tool_call(state):
         return state
     with trace.get_tracer(__name__).start_as_current_span("tool.search_corpus"):
-        state["retrieved"] = search_corpus(str(state["facts"]["disruption_type"]))
-    # Do not start drafting if the search consumed the remaining time/tool budget.
-    if not _budget_exceeded(state):
+        retrieval = search_corpus.invoke({
+            "query": f'{state["facts"]["disruption_type"]} compensation',
+            "k": 5,
+            "mode": "vector",
+        })
+    if retrieval.get("retrieval_error"):
+        state["retrieved"] = []
+        state["errors"] = [*state.get("errors", []), str(retrieval["retrieval_error"])]
+    else:
+        # Keep actual retrieved passages in graph state for future quote verification.
+        state["retrieved"] = retrieval.get("chunks", [])
+    if not _budget_exceeded(state) and not retrieval.get("retrieval_error"):
         state["draft"] = _stub_draft(state)
-    _log(state, "research", n=len(state["retrieved"]), tool_calls=state["tool_calls"])
+    _log(state, "research", n=len(state["retrieved"]), tool_calls=state["tool_calls"],
+         retrieval_error=retrieval.get("retrieval_error"))
     return state
 
 
@@ -124,10 +134,12 @@ def finalize(state: RunState) -> RunState:
             "escalation_reason": EscalationReason.BUDGET_EXCEEDED,
         }
     elif not draft:
+        reason = (EscalationReason.PROVIDER_DEGRADED
+                  if state.get("errors") else EscalationReason.VERIFICATION_FAILED)
         draft = {
             "route": Route.ESCALATE,
-            "summary": "No draft produced. Routed to a human officer.",
-            "escalation_reason": EscalationReason.VERIFICATION_FAILED,
+            "summary": "Retrieval failed or produced no usable evidence. Routed to a human officer.",
+            "escalation_reason": reason,
         }
     elif draft.get("route") != Route.ESCALATE:
         # Until grounding verification exists, even an injected/replaced draft
@@ -176,7 +188,7 @@ GRAPH = build_graph()
 def run_agent(claim: dict, correlation_id: str = "", *, run_id: str | None = None) -> tuple[Result, list[dict]]:
     out = GRAPH.invoke(
         {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
-         "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
+         "corpus_version": CORPUS_VERSION, "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's
         # recursion guard remains a second safety net, not the budget mechanism.
