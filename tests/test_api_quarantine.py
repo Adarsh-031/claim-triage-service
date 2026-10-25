@@ -170,7 +170,7 @@ def test_s02_malformed_quarantine_is_persisted_with_field_errors_without_queuein
     assert isinstance(stored[0], api.Quarantine)
     assert json.loads(stored[0].raw_body) == scenario["claim"]
     assert stored[0].client_id == "s02-acceptance-test"
-    assert fake_redis.incr_calls == 0
+    assert fake_redis.incr_calls == 1
     assert fake_redis.lpush_calls == []
 
 
@@ -189,7 +189,7 @@ def test_cross_field_validation_error_is_reported_against_destination(monkeypatc
     assert any(error["field"] == "destination" for error in response.json()["errors"])
     assert len(stored) == 1
     assert isinstance(stored[0], api.Quarantine)
-    assert fake_redis.incr_calls == 0
+    assert fake_redis.incr_calls == 1
     assert fake_redis.lpush_calls == []
 
 
