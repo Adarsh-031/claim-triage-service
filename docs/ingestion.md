@@ -110,3 +110,26 @@ and aliases (including alternative formatting and wording in both formats), sche
 unique IDs, text hashes, and byte-identical rebuilds. Hash mismatches,
 duplicate clauses, missing sources, and a missing PDF tool must fail clearly. The current pinned
 sources produce 246 chunks: CAR 81, domestic CoC 84, international CoC 81.
+
+## Chroma indexing
+
+`make ingest` remains an offline parsing/export command. `make index` synchronizes
+its generated `chunks.jsonl` with Chroma; `make index-check` checks exact contents
+and retrieves the known facilities clause without changing records. Set `CHROMA_URL`
+to a reachable server for local commands. Compose runs all three stages automatically
+and blocks worker startup if indexing or the retrieval check fails.
+
+The index uses Chroma's local ONNX MiniLM embedding function (the configured
+`sentence-transformers/all-MiniLM-L6-v2`), cosine distance, and contextual heading
+headers. The client is pinned to the existing Chroma server version. No paid provider
+or GPU runtime is needed. MiniLM truncates inputs to 256 tokens; full passages remain
+stored for provenance. This is a baseline semantic index, not a retrieval-quality
+claim for long parent clauses. A future retrieval implementation can split those
+passages while preserving existing clause provenance.
+
+Stable chunk IDs and fingerprints of the entire chunk (including headings/page/refs)
+skip unchanged embeddings. Upserts finish before stale IDs are deleted, allowing a
+rerun to repair a partial failure. Index/model metadata guards against mixing
+incompatible vectors. Ingestion owns the whole configured collection; serialize
+jobs and run before consumers because synchronization is not transactional.
+See [runbooks](runbooks.md) for commands, cache behavior and recovery.

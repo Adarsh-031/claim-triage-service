@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     database_url: str = "postgresql+psycopg://triage:triage@postgres:5432/triage"
     chroma_url: str = "http://chroma:8000"
+    chroma_collection: str = "triage-clauses-v1"
+    worker_metrics_port: int = 8002
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
     rate_limit_per_min: int = 30
 
