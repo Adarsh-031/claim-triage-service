@@ -12,6 +12,21 @@ Fractional rupees are rounded half up to the nearest whole rupee.
 The figures below are transcribed from the repository's CAR Section 3, Series M,
 Part IV, Revision 4 text in `tests/fixtures/car-s3-m-iv-r4.layout.txt`.
 
+## Workflow integration status
+
+This module is a deterministic calculation component, not yet a registered or invoked
+LangGraph tool. The current graph uses demo corpus fixtures and routes claims to human
+review because grounding verification is not implemented; its outputs must not be
+presented as a completed claim determination.
+
+The current `ClaimIn`/web form captures `ticket_fare_inr` and a nested `alternate`
+object. It does not capture the separate one-way basic fare and fuel charge needed by
+3.3.2/3.2.2, `refund_taken`, or downgrade sector, distance, and ticket cost including
+taxes. An adapter must map `alternate.accepted` to `alternate_flight_accepted` and
+collect those missing values explicitly. Do not derive basic fare/fuel from the total
+ticket fare, since it also may include taxes and fees. Until these facts are collected,
+the calculator must return `needs_evidence` for the missing fields.
+
 ## Cancellation — CAR 3.3.2
 
 Compensation is available only when the passenger was not informed in accordance
