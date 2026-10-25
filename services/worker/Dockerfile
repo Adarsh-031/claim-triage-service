@@ -14,6 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # 2) source
 COPY libs/common libs/common
+COPY prompts prompts
 COPY services/worker services/worker
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package triage-worker --no-editable

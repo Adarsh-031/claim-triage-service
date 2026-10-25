@@ -230,7 +230,9 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from worker import main as worker
+    from worker.agent.intake import LocalStructuredStubLLM
 
+    monkeypatch.setattr(worker, "get_llm", lambda: LocalStructuredStubLLM())
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))

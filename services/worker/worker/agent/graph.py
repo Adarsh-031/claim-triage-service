@@ -17,8 +17,10 @@ from triage_common.settings import settings
 
 from ..metrics import NODE_LATENCY
 from ..tools.corpus import DEMO_CORPUS_VERSION, search_corpus
+from .intake import IntakeError, LocalStructuredStubLLM, extract_intake, is_in_scope_route, structured_claim_facts
+from .llm import get_llm
 
-PROMPT_VERSION = "skeleton-v1"
+PROMPT_VERSION = "intake-v1"
 
 
 def _log(state: RunState, step: str, **detail: object) -> None:
@@ -56,8 +58,26 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
 
 
 def intake(state: RunState) -> RunState:
-    state["facts"] = {"disruption_type": state["claim"].get("disruption_type", "unknown")}
-    _log(state, "intake", facts=state["facts"])
+    claim = state["claim"]
+    if not is_in_scope_route(str(claim.get("origin") or "")):
+        state["facts"] = structured_claim_facts(claim)
+        state["draft"] = {
+            "route": Route.ESCALATE,
+            "summary": "The route is outside the India-focused source corpus. Routed to a human officer.",
+            "escalation_reason": EscalationReason.OUT_OF_CORPUS,
+        }
+    else:
+        try:
+            facts = extract_intake(claim, llm=state.get("intake_llm"))
+            state["facts"] = facts.model_dump()
+        except IntakeError as exc:
+            state["facts"] = structured_claim_facts(claim)
+            state["draft"] = {
+                "route": Route.ESCALATE,
+                "summary": "Claim intake could not be validated safely. Routed to a human officer.",
+                "escalation_reason": exc.reason,
+            }
+    _log(state, "intake", facts=state["facts"], conflicts=state["facts"].get("conflicts", []))
     return state
 
 
@@ -161,8 +181,11 @@ def build_graph():
         g.add_node(name, _bounded(fn))
     g.add_node("finalize", traced_finalize)
     g.set_entry_point("intake")
-    g.add_conditional_edges("intake", lambda s: "finalize" if s.get("budget_exceeded") else "research",
-                            {"finalize": "finalize", "research": "research"})
+    g.add_conditional_edges(
+        "intake",
+        lambda s: "finalize" if s.get("budget_exceeded") or s.get("draft") else "research",
+        {"finalize": "finalize", "research": "research"},
+    )
     g.add_conditional_edges("research", route_fn,
                             {"finalize": "finalize", "research": "research", "verify": "verify"})
     g.add_edge("verify", "finalize")
@@ -173,9 +196,15 @@ def build_graph():
 GRAPH = build_graph()
 
 
-def run_agent(claim: dict, correlation_id: str = "", *, run_id: str | None = None) -> tuple[Result, list[dict]]:
+def run_agent(
+    claim: dict, correlation_id: str = "", *, run_id: str | None = None, llm=None
+) -> tuple[Result, list[dict]]:
+    # Unit tests use a deterministic in-process stub (no network). The worker
+    # passes its configured provider explicitly for real stub/production calls.
+    if llm is None:
+        llm = LocalStructuredStubLLM() if settings.llm_provider == "stub" else get_llm()
     out = GRAPH.invoke(
-        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
+        {"claim": claim, "intake_llm": llm, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
          "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's

@@ -16,6 +16,7 @@ from triage_common.store import get_run, init_db, update_run
 from triage_common.telemetry import configure_tracing
 
 from .agent.graph import run_agent
+from .agent.llm import get_llm
 from .metrics import ACTIVE, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
 
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
@@ -39,7 +40,7 @@ def _handle(job: dict) -> None:
     RUNS_STARTED.inc()
     update_run(run_id, status=RunStatus.running.value)
     try:
-        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id))
+        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id), llm=get_llm())
         # Preserve the API/store contract while the graph emits the stable Result.
         rec = Recommendation(
             route=result.route, summary=result.summary, compensation_inr=result.amount,

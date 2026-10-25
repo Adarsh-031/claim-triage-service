@@ -195,6 +195,7 @@ class RunState(TypedDict, total=False):
     """Partial state shared by LangGraph nodes; each node fills its own fields."""
 
     claim: dict[str, object]
+    intake_llm: object
     facts: dict[str, object]
     retrieved: list[dict[str, object]]
     draft: dict[str, object] | None

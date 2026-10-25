@@ -1,0 +1,56 @@
+{
+  "s01_demo_cancellation_alternate_taken": {
+    "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 90,
+    "block_time_minutes": 165,
+    "alternate_offered": true,
+    "alternate_accepted": true,
+    "contact_details_given": true,
+    "stated_cause": null
+  },
+  "s08_delay_two_hours_short_block": {
+    "disruption_type": "delay",
+    "notice_minutes_before_departure": null,
+    "block_time_minutes": 120,
+    "alternate_offered": null,
+    "alternate_accepted": null,
+    "contact_details_given": true,
+    "stated_cause": null
+  },
+  "s14_denied_boarding_alternate_within_hour": {
+    "disruption_type": "denied_boarding",
+    "notice_minutes_before_departure": null,
+    "block_time_minutes": 115,
+    "alternate_offered": true,
+    "alternate_accepted": true,
+    "contact_details_given": true,
+    "stated_cause": null
+  },
+  "s19_involuntary_domestic_downgrade": {
+    "disruption_type": "downgrade",
+    "notice_minutes_before_departure": null,
+    "block_time_minutes": 165,
+    "alternate_offered": null,
+    "alternate_accepted": null,
+    "contact_details_given": true,
+    "stated_cause": null
+  },
+  "s22_vietnam_route_out_of_corpus": {
+    "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 60,
+    "block_time_minutes": 125,
+    "alternate_offered": null,
+    "alternate_accepted": null,
+    "contact_details_given": true,
+    "stated_cause": null
+  },
+  "s23_statement_prompt_injection": {
+    "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 90,
+    "block_time_minutes": 165,
+    "alternate_offered": true,
+    "alternate_accepted": true,
+    "contact_details_given": true,
+    "stated_cause": null
+  }
+}

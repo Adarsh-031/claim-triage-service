@@ -116,7 +116,8 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
     original_run_agent = graph.run_agent
 
-    def checked_run_agent(claim, correlation_id, *, run_id):
+    def checked_run_agent(claim, correlation_id, *, run_id, llm=None):
+        # Omit the HTTP provider in unit tests; run_agent defaults to its in-process stub.
         result, trace = original_run_agent(claim, correlation_id, run_id=run_id)
         assert str(result.run_id) == run_id
         return result, trace
@@ -165,6 +166,9 @@ def test_terminal_step_reservation_skips_node_side_effects():
 
 @pytest.mark.parametrize("route", [Route.DECLINE, Route.PAY, Route.REQUEST_EVIDENCE])
 def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, route):
+    from worker.agent.intake import LocalStructuredStubLLM
+
+    monkeypatch.setattr(worker_main, "get_llm", lambda: LocalStructuredStubLLM())
     original_stub = graph._stub_draft
 
     def consequential_draft(state):
@@ -186,3 +190,13 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
     assert rec.verified is False
     assert rec.summary != "Unverified decision"
     assert rec.citations
+
+
+def test_vietnam_route_is_escalated_before_retrieval():
+    scenario_path = Path(__file__).parents[1] / "eval/scenarios/s22_vietnam_route_out_of_corpus.json"
+    claim = json.loads(scenario_path.read_text())["claim"]
+    result, trace = graph.run_agent(claim)
+    assert result.route is Route.ESCALATE
+    assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
+    assert trace[-1]["step"] == "finalize"
+    assert not any(entry["step"] == "research" for entry in trace)
