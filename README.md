@@ -73,8 +73,9 @@ curl -s localhost:8000/v1/runs/<run_id> | jq
 
 Scale workers: `docker compose up --scale worker=3`
 
-PostgreSQL's initialization script runs only when its data volume is empty. To recreate the database from scratch,
-run `docker compose down -v` before starting the stack again. The `.env.example` values are for local development;
+PostgreSQL's initialization script runs only when its data volume is empty. After changing the database schema for this
+demo, recreate the local database volume with `docker compose down -v` before starting the stack again. This deletes
+local PostgreSQL data; do not use it on a volume containing data you need to keep. The `.env.example` values are for local development;
 replace them for any shared or deployed environment.
 
 ## Layout
