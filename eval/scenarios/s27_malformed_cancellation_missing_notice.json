@@ -1,0 +1,19 @@
+{
+  "id": "s27_malformed_cancellation_missing_notice",
+  "description": "Cancellation without notice_minutes_before_departure is rejected and quarantined.",
+  "claim": {
+    "pnr": "ABC123",
+    "airline_code": "6E",
+    "flight_number": "6E512",
+    "flight_date": "2026-10-14",
+    "origin": "BLR",
+    "destination": "DEL",
+    "block_time_minutes": 165,
+    "disruption_type": "cancellation",
+    "reported_at_airport": true,
+    "contact_info_provided": true,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 240},
+    "statement": "My flight was cancelled and I took an alternate flight four hours later."
+  },
+  "expected": {"route": "quarantine", "must_cite": []}
+}
