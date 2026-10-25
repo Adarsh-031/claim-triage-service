@@ -144,3 +144,32 @@ def test_valid_claim_still_queues_unchanged(monkeypatch):
     assert fake_redis.incr_calls == 1
     assert len(fake_redis.lpush_calls) == 1
     assert fake_redis.lpush_calls[0][0] == api.settings.queue_name
+
+
+
+def test_s02_malformed_quarantine_is_persisted_with_field_errors_without_queueing(monkeypatch):
+    scenario = json.loads(
+        (ROOT / "eval/scenarios/s02_malformed_quarantine.json").read_text(encoding="utf-8")
+    )
+    stored = []
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+
+    response = client.post(
+        "/v1/claims",
+        json=scenario["claim"],
+        headers={"x-client-id": "s02-acceptance-test"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["quarantine_id"]
+    assert any(error["field"] == "pnr" for error in payload["errors"])
+    assert any(error["field"] == "destination" for error in payload["errors"])
+    assert len(stored) == 1
+    assert isinstance(stored[0], api.Quarantine)
+    assert json.loads(stored[0].raw_body) == scenario["claim"]
+    assert stored[0].client_id == "s02-acceptance-test"
+    assert fake_redis.incr_calls == 0
+    assert fake_redis.lpush_calls == []
