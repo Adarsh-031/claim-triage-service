@@ -13,9 +13,10 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS quarantine (
     id uuid PRIMARY KEY,
-    payload text NOT NULL,
+    raw_body text NOT NULL,
     errors json NOT NULL,
-    created_at timestamptz NOT NULL
+    client_id varchar(255) NOT NULL DEFAULT 'unknown',
+    received_at timestamptz NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
