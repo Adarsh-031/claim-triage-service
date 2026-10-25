@@ -46,11 +46,11 @@ def test_sync_idempotent_updates_metadata_and_prunes_stale(target):
     assert sync([first, stale], target) == {"count": 2, "upserted": 0, "deleted": 0}
     first.page = 7  # Provenance changes also invalidate the cached record.
     assert sync([first], target) == {"count": 1, "upserted": 1, "deleted": 1}
-    assert verify([first], target)["count"] == 1
+    assert verify([first], target, require_retrieval_smoke=False)["count"] == 1
     assert sync([first], target, force=True)["upserted"] == 1
     first = chunk(text="Updated meals provision")
     assert sync([first], target)["upserted"] == 1
-    assert verify([first], target)["count"] == 1
+    assert verify([first], target, require_retrieval_smoke=False)["count"] == 1
 
 
 def test_incompatible_collection_is_rejected(target):
@@ -63,9 +63,9 @@ def test_verify_detects_stale_records_and_missing_ids(target):
     first = chunk()
     sync([first], target)
     with pytest.raises(ValueError, match="record differs"):
-        verify([chunk(text="changed")], target)
+        verify([chunk(text="changed")], target, require_retrieval_smoke=False)
     with pytest.raises(ValueError, match="IDs differ"):
-        verify([first, chunk("3.8.2")], target)
+        verify([first, chunk("3.8.2")], target, require_retrieval_smoke=False)
 
 
 def test_failed_upsert_does_not_prune_previous_records(target, monkeypatch):
@@ -92,3 +92,44 @@ def test_load_rejects_empty_duplicate_and_tampered_chunks(tmp_path):
     path.write_text(first.model_dump_json())
     with pytest.raises(ValueError, match="hash mismatch"):
         load_chunks(path)
+
+
+
+def test_cancellation_compensation_bm25_real_chunks_contract():
+    from cli.index_corpus import _bm25_top_ids
+
+    chunks = [
+        chunk("3.3.1", "Cancellation permits an alternate flight or refund."),
+        chunk("3.3.2", "Cancellation compensation and full refund apply to eligible passengers."),
+        chunk("3.3.2(a)", "Cancellation compensation may be payable in the stated circumstances."),
+        chunk("3.8.1(a)", "Meals and refreshments in relation to waiting time."),
+        chunk("4.1", "Delay rules use a different calculation."),
+    ]
+    top = _bm25_top_ids(chunks, "cancellation compensation", 3, "CAR-S3-M-IV-R4")
+    assert "CAR-S3-M-IV-R4:3.3.2:0001" in top
+
+
+def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
+    from cli.index_corpus import verify_cancellation_retrieval
+
+    chunks = [
+        chunk("3.3.1", "Cancellation permits an alternate flight or refund."),
+        chunk("3.3.2", "Cancellation compensation and full refund apply to eligible passengers."),
+        chunk("3.3.2(a)", "Cancellation compensation may be payable in the stated circumstances."),
+        chunk("3.8.1(a)", "Meals and refreshments in relation to waiting time."),
+    ]
+
+    class FakeTarget:
+        def query(self, **kwargs):
+            assert kwargs["query_texts"] == ["cancellation compensation"]
+            assert kwargs["n_results"] == 3
+            assert kwargs["where"] == {"doc_id": "CAR-S3-M-IV-R4"}
+            return {"ids": [[
+                "CAR-S3-M-IV-R4:3.3.2:0001",
+                "CAR-S3-M-IV-R4:3.3.2(a):0001",
+                "CAR-S3-M-IV-R4:3.3.1:0001",
+            ]]}
+
+    result = verify_cancellation_retrieval(chunks, FakeTarget())
+    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_top3"]
+    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_bm25_top3"]

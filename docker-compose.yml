@@ -25,6 +25,8 @@ services:
       CORPUS_CHUNKS_PATH: /src/corpus/processed/chunks.jsonl
     volumes:
       - ./corpus:/src/corpus:ro
+      - ./eval:/src/eval:ro
+      - embedding_cache:/root/.cache/chroma
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

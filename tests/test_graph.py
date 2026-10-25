@@ -50,7 +50,7 @@ def test_s01_returns_valid_cited_result_and_ordered_trace(monkeypatch):
     assert [entry["step"] for entry in trace] == ["start", "intake", "research", "verify", "finalize"]
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 3
-    assert trace[-1]["tool_calls"] == 1
+    assert trace[-1]["tool_calls"] == 2
     assert trace[-2]["verified"] is False
 
 
@@ -155,7 +155,7 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         assert rec.citations
 
 
-@pytest.mark.parametrize(("used", "invoked", "reserved"), [(13, True, 14), (14, False, 15), (15, False, 15)])
+@pytest.mark.parametrize(("used", "invoked", "reserved"), [(12, 2, 14), (13, 1, 15), (14, 0, 15), (15, 0, 15)])
 def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, invoked, reserved):
     search = Mock(return_value=_fake_search_result())
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=search))
@@ -164,7 +164,7 @@ def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, in
         "started_at": graph.time.monotonic(), "step_count": 2, "tool_calls": used,
     }
     graph.research(state)
-    assert search.call_count == int(invoked)
+    assert search.call_count == invoked
     assert state["tool_calls"] == reserved
     assert state.get("budget_exceeded", False) is (not invoked)
 

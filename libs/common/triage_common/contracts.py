@@ -212,6 +212,7 @@ class RunState(TypedDict, total=False):
     prompt_version: str
     corpus_version: str
     errors: list[str]
+    retrieval_failed: bool
 
 
 class Recommendation(BaseModel):

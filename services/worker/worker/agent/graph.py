@@ -89,25 +89,36 @@ def _reserve_tool_call(state: RunState) -> bool:
 
 
 def research(state: RunState) -> RunState:
-    if not _reserve_tool_call(state):
-        return state
-    with trace.get_tracer(__name__).start_as_current_span("tool.search_corpus"):
-        retrieval = search_corpus.invoke({
-            "query": f'{state["facts"]["disruption_type"]} compensation',
-            "k": 5,
-            "mode": "vector",
-        })
     state.setdefault("retrieved", [])
-    retrieved_chunks = retrieval.get("chunks", [])
-    # Append successful results so later verification sees evidence from every call.
-    if retrieved_chunks:
-        state["retrieved"] = [*state.get("retrieved", []), *retrieved_chunks]
-    if retrieval.get("retrieval_error"):
-        state["errors"] = [*state.get("errors", []), str(retrieval["retrieval_error"])]
-    if not _budget_exceeded(state) and not retrieval.get("retrieval_error"):
+    disruption = state["facts"]["disruption_type"]
+    queries = [
+        (f"{disruption} compensation alternate flight refund", 5),
+        ("meals and refreshments in relation to waiting time", 3),
+    ]
+    errors = []
+    for query, limit in queries:
+        if not _reserve_tool_call(state):
+            break
+        with trace.get_tracer(__name__).start_as_current_span("tool.search_corpus"):
+            retrieval = search_corpus.invoke({
+                "query": query, "k": limit, "doc_id": "CAR-S3-M-IV-R4", "mode": "vector",
+            })
+        if retrieval.get("retrieval_error"):
+            errors.append(str(retrieval["retrieval_error"]))
+            state["retrieval_failed"] = True
+            break
+        by_id = {chunk["chunk_id"]: chunk for chunk in state["retrieved"]}
+        for chunk in retrieval.get("chunks", []):
+            by_id.setdefault(chunk["chunk_id"], chunk)
+        state["retrieved"] = list(by_id.values())
+        if _budget_exceeded(state):
+            break
+    if errors:
+        state["errors"] = [*state.get("errors", []), *errors]
+    if not _budget_exceeded(state) and not state.get("retrieval_failed"):
         state["draft"] = _stub_draft(state)
     _log(state, "research", n=len(state["retrieved"]), tool_calls=state["tool_calls"],
-         retrieval_error=retrieval.get("retrieval_error"))
+         retrieval_error="; ".join(errors) or None)
     return state
 
 
@@ -119,7 +130,7 @@ def verify(state: RunState) -> RunState:
 
 
 def route_fn(state: RunState) -> str:
-    if state.get("budget_exceeded") or state.get("errors"):
+    if state.get("budget_exceeded") or state.get("retrieval_failed"):
         return "finalize"
     # A fake research node can withhold its draft to exercise bounded retries.
     return "verify" if state.get("draft") else "research"

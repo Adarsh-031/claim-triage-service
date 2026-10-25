@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 
 import pytest
 from langchain_core.tools import BaseTool
@@ -68,6 +69,14 @@ def test_get_clause_missing_is_not_an_exception(chunks_file):
     assert result == {"chunk": None, "retrieval_error": "not found"}
 
 
+def test_clause_lookup_normalizes_whitespace_and_returns_a_copy(chunks_file):
+    result = corpus._get_clause_impl(" 3.8.1 (a) ")
+    assert result["retrieval_error"] is None
+    result["chunk"]["heading_path"].append("mutated")
+    again = corpus._get_clause_impl("3.8.1(a)")
+    assert "mutated" not in again["chunk"]["heading_path"]
+
+
 def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
     seen = {}
     class FakeCollection:
@@ -78,7 +87,8 @@ def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
                 "documents": [["CAR-S3-M-IV-R4 > 3 Cancellation\nCancellation compensation."]],
                 "metadatas": [[{
                     "doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2",
-                    "heading_path": json.dumps(["3 Cancellation"]), "hash": "abc", "refs": "[]",
+                    "heading_path": json.dumps(["3 Cancellation"]),
+                    "hash": hashlib.sha256(b"Cancellation compensation.").hexdigest(), "refs": "[]",
                 }]],
                 "distances": [[0.1]],
             }
@@ -86,6 +96,8 @@ def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
         def get_collection(self, name, **kwargs):
             assert name == corpus.settings.chroma_collection
             return FakeCollection()
+    monkeypatch.setattr(corpus, "_VECTOR_BACKEND", None)
+    monkeypatch.setattr(corpus, "DefaultEmbeddingFunction", lambda: object())
     monkeypatch.setattr(corpus.chromadb, "HttpClient", lambda **kwargs: FakeClient())
     result = corpus._vector_search("cancellation compensation", 5, "CAR-S3-M-IV-R4")
     assert seen["where"] == {"doc_id": "CAR-S3-M-IV-R4"}
@@ -99,7 +111,7 @@ def test_failures_return_empty_chunks_and_error_flag(monkeypatch, mode, message)
     def fail(*args, **kwargs):
         if message == "timeout":
             raise TimeoutError("slow backend")
-        raise RuntimeError("index down")
+        raise OSError("index down")
     monkeypatch.setattr(corpus, "_vector_search" if mode == "vector" else "_bm25_search", fail)
     result = corpus._search_impl("cancellation", mode=mode)
     assert result == {"chunks": [], "retrieval_error": message}
@@ -108,3 +120,78 @@ def test_failures_return_empty_chunks_and_error_flag(monkeypatch, mode, message)
 def test_invalid_search_arguments_are_reported_without_exception():
     assert corpus._search_impl(" ", mode="vector")["retrieval_error"] == "empty query"
     assert corpus._search_impl("cancellation", k=0)["retrieval_error"] == "k must be greater than zero"
+
+
+
+def test_vector_backend_is_created_once_and_reused(monkeypatch):
+    calls = {"client": 0, "embedding": 0}
+
+    class FakeCollection:
+        def query(self, **kwargs):
+            text = "Cancellation compensation."
+            return {
+                "ids": [["CAR-S3-M-IV-R4:3.3.2:0001"]],
+                "documents": [[f"CAR-S3-M-IV-R4 > 3 Cancellation\\n{text}"]],
+                "metadatas": [[{
+                    "doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2",
+                    "heading_path": ["3 Cancellation"],
+                    "hash": hashlib.sha256(text.encode()).hexdigest(), "refs": [], "page": -1,
+                }]],
+                "distances": [[0.1]],
+            }
+
+    class FakeClient:
+        def get_collection(self, name, **kwargs):
+            return FakeCollection()
+
+    def client_factory(**kwargs):
+        calls["client"] += 1
+        return FakeClient()
+
+    def embedding_factory():
+        calls["embedding"] += 1
+        return object()
+
+    monkeypatch.setattr(corpus, "_VECTOR_BACKEND", None)
+    monkeypatch.setattr(corpus.chromadb, "HttpClient", client_factory)
+    monkeypatch.setattr(corpus, "DefaultEmbeddingFunction", embedding_factory)
+    assert corpus._vector_search("cancellation", 3, None)
+    assert corpus._vector_search("refund", 3, None)
+    assert calls == {"client": 1, "embedding": 1}
+
+
+def test_vector_normalization_drops_source_hash_mismatch():
+    result = corpus._normalize_chroma(
+        ["bad-id"],
+        ["CAR-S3-M-IV-R4 > 3 Cancellation\\nnot the indexed source text"],
+        [{"doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2", "hash": "0" * 64}],
+    )
+    assert result == []
+
+
+def test_timeout_returns_control_for_a_blocked_operation(monkeypatch):
+    monkeypatch.setattr(corpus.settings, "tool_timeout_s", 0.005)
+
+    def slow():
+        time.sleep(0.2)
+        return "late"
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="retrieval exceeded"):
+        corpus._within_timeout(slow)
+    assert time.monotonic() - started < 0.15
+    time.sleep(0.21)
+
+
+def test_search_tool_schema_accepts_optional_doc_id_and_literal_mode(chunks_file, monkeypatch):
+    chunk = make_chunk("3.3.2", "Cancellation compensation.")
+    monkeypatch.setattr(corpus, "_bm25_search", lambda query, k, doc_id: [{**chunk, "score": 1.0}])
+    result = corpus.search_corpus.invoke({
+        "query": "cancellation compensation", "doc_id": None, "mode": "bm25",
+    })
+    assert result["retrieval_error"] is None
+    assert result["chunks"][0]["clause_id"] == "3.3.2"
+    with pytest.raises(Exception):
+        corpus.search_corpus.invoke({
+            "query": "cancellation compensation", "doc_id": "UNKNOWN-DOC", "mode": "bm25",
+        })

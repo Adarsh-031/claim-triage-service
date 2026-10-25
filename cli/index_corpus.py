@@ -4,6 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import re
+from collections import Counter
 from pathlib import Path
 
 import chromadb
@@ -75,7 +78,58 @@ def sync(chunks: list[Chunk], target, batch_size: int = 64, *, force: bool = Fal
     return {"count": target.count(), "upserted": len(changed), "deleted": len(stale)}
 
 
-def verify(chunks: list[Chunk], target) -> dict:
+def _bm25_top_ids(chunks: list[Chunk], query: str, k: int, doc_id: str) -> list[str]:
+    """Return a deterministic BM25 top-k over the exact processed corpus."""
+    query = re.sub(r"(?<=\d)\s+\(", "(", query.casefold())
+
+    def tokenize(text: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+(?:[.][a-z0-9]+)*(?:\([a-z0-9]+\))*", text.casefold())
+
+    selected = [chunk for chunk in chunks if chunk.doc_id == doc_id]
+    documents = [tokenize(" ".join([chunk.clause_id, *chunk.heading_path, chunk.text]))
+                 for chunk in selected]
+    if not documents:
+        return []
+    query_tokens = tokenize(query)
+    frequencies = [Counter(tokens) for tokens in documents]
+    document_frequency: Counter[str] = Counter()
+    for term_counts in frequencies:
+        document_frequency.update(term_counts.keys())
+    average_length = sum(map(len, documents)) / len(documents)
+    scores = []
+    for chunk, tokens, term_counts in zip(selected, documents, frequencies, strict=True):
+        length_norm = 1.5 * (1 - 0.75 + 0.75 * len(tokens) / max(average_length, 1))
+        score = 0.0
+        for token in query_tokens:
+            frequency = term_counts.get(token, 0)
+            if frequency:
+                df = document_frequency[token]
+                idf = math.log(1 + (len(documents) - df + 0.5) / (df + 0.5))
+                score += idf * frequency * 2.5 / (frequency + length_norm)
+        scores.append((score, chunk.chunk_id))
+    return [chunk_id for score, chunk_id in sorted(scores, key=lambda item: (-item[0], item[1]))
+            if score > 0][:k]
+
+
+def verify_cancellation_retrieval(chunks: list[Chunk], target) -> dict:
+    expected_id = "CAR-S3-M-IV-R4:3.3.2:0001"
+    if expected_id not in {chunk.chunk_id for chunk in chunks}:
+        raise ValueError(f"Known cancellation compensation chunk absent: {expected_id}")
+    vector_result = target.query(
+        query_texts=["cancellation compensation"], n_results=min(3, len(chunks)),
+        where={"doc_id": "CAR-S3-M-IV-R4"},
+    )
+    vector_top = (vector_result.get("ids") or [[]])[0]
+    bm25_top = _bm25_top_ids(chunks, "cancellation compensation", 3, "CAR-S3-M-IV-R4")
+    if expected_id not in vector_top:
+        raise ValueError(f"Cancellation clause 3.3.2 is not in vector top 3: {vector_top}")
+    if expected_id not in bm25_top:
+        raise ValueError(f"Cancellation clause 3.3.2 is not in BM25 top 3: {bm25_top}")
+    return {"cancellation_compensation_vector_top3": vector_top,
+            "cancellation_compensation_bm25_top3": bm25_top}
+
+
+def verify(chunks: list[Chunk], target, *, require_retrieval_smoke: bool = True) -> dict:
     validate_collection(target)
     stored = target.get(include=["documents", "metadatas", "embeddings"])
     expected = {chunk.chunk_id: record(chunk) for chunk in chunks}
@@ -94,7 +148,10 @@ def verify(chunks: list[Chunk], target) -> dict:
                            n_results=min(5, len(chunks)), where={"doc_id": "CAR-S3-M-IV-R4"})
     if known not in matches["ids"][0]:
         raise ValueError(f"Known facilities passage was not retrieved: {matches['ids'][0]}")
-    return {"count": len(expected), "retrieved": matches["ids"][0]}
+    result = {"count": len(expected), "retrieved": matches["ids"][0]}
+    if require_retrieval_smoke:
+        result.update(verify_cancellation_retrieval(chunks, target))
+    return result
 
 
 def main() -> None:
