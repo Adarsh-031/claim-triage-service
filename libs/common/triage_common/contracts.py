@@ -60,7 +60,7 @@ class ClaimIn(BaseModel):
     destination: str = Field(pattern=r"^[A-Z]{3}$")
     block_time_minutes: int | None = Field(default=None, ge=15, le=600)
     disruption_type: DisruptionType = DisruptionType.unknown
-    notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60)
+    notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60, validate_default=True)
     delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
     reported_at_airport: bool | None = None
     contact_info_provided: bool | None = None
@@ -74,12 +74,17 @@ class ClaimIn(BaseModel):
     def reject_hidden_characters(cls, value: str | None) -> str | None:
         return _reject_control_or_zero_width(value)
 
+    @field_validator("notice_minutes_before_departure")
+    @classmethod
+    def cancellation_requires_notice(cls, value: int | None, info) -> int | None:
+        if info.data.get("disruption_type") == DisruptionType.cancellation and value is None:
+            raise ValueError("notice_minutes_before_departure is required for cancellation")
+        return value
+
     @model_validator(mode="after")
     def cross_field(self) -> ClaimIn:
         if self.origin == self.destination:
             raise ValueError("origin and destination must differ")
-        if self.disruption_type == DisruptionType.cancellation and self.notice_minutes_before_departure is None:
-            raise ValueError("notice_minutes_before_departure is required for cancellation")
         if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
         if (
