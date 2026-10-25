@@ -74,7 +74,7 @@ def _rate_limited(client: str) -> bool:
 async def quarantine_invalid(request: Request, exc: RequestValidationError):
     """Invalid claims are stored in quarantine with field-level errors; no agent run starts."""
     raw = await request.body()
-    body = raw[:RAW_BODY_LIMIT].decode(errors="replace")
+    body = raw[:RAW_BODY_LIMIT].decode("utf-8", errors="ignore")
     errors = []
     for error in exc.errors():
         field = ".".join(map(str, error["loc"][1:]))
