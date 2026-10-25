@@ -61,7 +61,7 @@ class ClaimIn(BaseModel):
     block_time_minutes: int | None = Field(default=None, ge=15, le=600)
     disruption_type: DisruptionType = DisruptionType.unknown
     notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60, validate_default=True)
-    delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
+    delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60, validate_default=True)
     reported_at_airport: bool | None = None
     contact_info_provided: bool | None = None
     stated_cause: str | None = Field(default=None, max_length=300)
@@ -74,6 +74,13 @@ class ClaimIn(BaseModel):
     def reject_hidden_characters(cls, value: str | None) -> str | None:
         return _reject_control_or_zero_width(value)
 
+    @field_validator("destination")
+    @classmethod
+    def route_must_differ(cls, value: str, info) -> str:
+        if info.data.get("origin") == value:
+            raise ValueError("origin and destination must differ")
+        return value
+
     @field_validator("notice_minutes_before_departure")
     @classmethod
     def cancellation_requires_notice(cls, value: int | None, info) -> int | None:
@@ -81,18 +88,15 @@ class ClaimIn(BaseModel):
             raise ValueError("notice_minutes_before_departure is required for cancellation")
         return value
 
-    @model_validator(mode="after")
-    def cross_field(self) -> ClaimIn:
-        if self.origin == self.destination:
-            raise ValueError("origin and destination must differ")
-        if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
+    @field_validator("delay_minutes")
+    @classmethod
+    def delay_matches_disruption(cls, value: int | None, info) -> int | None:
+        disruption = info.data.get("disruption_type")
+        if disruption == DisruptionType.delay and value is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
-        if (
-            self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding)
-            and self.delay_minutes
-        ):
+        if disruption in (DisruptionType.cancellation, DisruptionType.denied_boarding) and value:
             raise ValueError("delay_minutes does not apply to cancellation or denied_boarding")
-        return self
+        return value
 
 
 class Route(StrEnum):
