@@ -19,7 +19,7 @@ def _reject_control_or_zero_width(value: str | None) -> str | None:
     for char in value:
         category = unicodedata.category(char)
         # Newline, carriage return, and tab are normal passenger-statement whitespace.
-        if category in {"Cc", "Cf", "Cs"} and char not in {"\\n", "\\r", "\\t"}:
+        if category in {"Cc", "Cf", "Cs"} and ord(char) not in {9, 10, 13}:
             raise ValueError("must not contain control or zero-width characters")
     return value
 
