@@ -9,7 +9,8 @@ import json
 import logging
 import math
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -161,9 +162,9 @@ def _within_timeout(function, *args):
     future = executor.submit(function, *args)
     try:
         return future.result(timeout=settings.tool_timeout_s)
-    except FutureTimeout:
+    except FutureTimeout as exc:
         future.cancel()
-        raise TimeoutError(f"retrieval exceeded {settings.tool_timeout_s:g}s")
+        raise TimeoutError(f"retrieval exceeded {settings.tool_timeout_s:g}s") from exc
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 

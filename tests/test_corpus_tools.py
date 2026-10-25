@@ -4,7 +4,6 @@ import json
 import pytest
 from langchain_core.tools import BaseTool
 from triage_common.contracts import Chunk
-
 from worker.tools import corpus
 
 
