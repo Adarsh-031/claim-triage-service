@@ -112,7 +112,11 @@ def test_fixture_search_filters_and_limits():
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
     updates = []
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+    monkeypatch.setattr(
+        worker_main,
+        "get_run",
+        lambda _: SimpleNamespace(claim=SCENARIO["claim"], status=RunStatus.queued.value),
+    )
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
     original_run_agent = graph.run_agent
 
@@ -126,7 +130,9 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     worker_main.handle({"run_id": str(run_id), "cid": "worker-test"})
 
-    assert updates[0] == (run_id, {"status": RunStatus.running.value})
+    assert updates[0][0] == run_id
+    assert updates[0][1]["status"] == RunStatus.running.value
+    assert updates[0][1]["started_at"] is not None
     final = updates[-1][1]
     rec = Recommendation.model_validate(final["result"])
     assert final["status"] == "escalated"
@@ -174,7 +180,11 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
     monkeypatch.setattr(graph, "_stub_draft", consequential_draft)
     updates = []
     run_id = uuid4()
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+    monkeypatch.setattr(
+        worker_main,
+        "get_run",
+        lambda _: SimpleNamespace(claim=SCENARIO["claim"], status=RunStatus.queued.value),
+    )
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append(update))
     worker_main.handle({"run_id": str(run_id)})
     saved = updates[-1]

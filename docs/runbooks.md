@@ -152,7 +152,7 @@ docker compose restart worker
 Do not delete or flush the Redis queue as a backlog fix.
 
 **Verify:** Confirm Redis and workers are healthy, `LLEN triage:runs` is trending
-down, and queued runs reach `completed`, `escalated`, or `failed` when polled through
+down, and queued runs reach `done`, `escalated`, or `failed` when polled through
 the API.
 
 ## Verifier worker crash

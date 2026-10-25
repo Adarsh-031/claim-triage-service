@@ -228,7 +228,8 @@ class Recommendation(BaseModel):
 class RunStatus(StrEnum):
     queued = "queued"
     running = "running"
-    completed = "completed"
+    done = "done"
+    completed = "completed"  # Legacy status value accepted during rollout.
     escalated = "escalated"
     failed = "failed"
 
@@ -238,6 +239,8 @@ class RunOut(BaseModel):
     status: RunStatus
     created_at: datetime
     updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     result: Recommendation | None = None
     error: str | None = None
 

@@ -100,7 +100,7 @@
     const formMessage = document.getElementById("form-message");
     const submitButton = document.getElementById("submit-button");
     const demoButton = document.getElementById("demo-button");
-    const terminalStatuses = new Set(["completed", "escalated", "failed"]);
+    const terminalStatuses = new Set(["done", "completed", "escalated", "failed"]);
     let activeRunId = null;
     let pollToken = 0;
 
@@ -224,7 +224,7 @@
       traceButton.type = "button";
       traceButton.addEventListener("click", () => loadTrace(run.run_id, traceButton));
       result.append(traceButton);
-      if (run.status === "completed" || run.status === "escalated") renderFeedback(run.run_id);
+      if (["done", "completed", "escalated"].includes(run.status)) renderFeedback(run.run_id);
     }
 
     async function loadTrace(runId, button) {

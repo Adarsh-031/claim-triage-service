@@ -151,8 +151,16 @@ def get_run_status(run_id: uuid.UUID):
     run = get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
-    return RunOut(run_id=run.id, status=run.status, created_at=run.created_at, updated_at=run.updated_at,
-                  result=Recommendation(**run.result) if run.result else None, error=run.error)
+    return RunOut(
+        run_id=run.id,
+        status=run.status,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        result=Recommendation(**run.result) if run.result else None,
+        error=run.error,
+    )
 
 
 @app.get("/v1/runs/{run_id}/trace")

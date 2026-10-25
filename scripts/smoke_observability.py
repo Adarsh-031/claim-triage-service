@@ -23,7 +23,7 @@ def check(api: str, jaeger: str, timeout: float = 60) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = fetch(api + f"/v1/runs/{run_id}")["status"]
-        if status in {"completed", "escalated", "failed"}:
+        if status in {"done", "completed", "escalated", "failed"}:
             break
         time.sleep(1)
     else:
