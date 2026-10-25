@@ -6,9 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
 from app import main as api
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 client = TestClient(api.app)
