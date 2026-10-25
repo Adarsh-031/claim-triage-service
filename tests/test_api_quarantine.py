@@ -175,7 +175,9 @@ def test_s02_malformed_quarantine_is_persisted_with_field_errors_without_queuein
 
 
 def test_cross_field_validation_error_is_reported_against_destination(monkeypatch):
+    stored = []
     fake_redis = FakeRedis()
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", fake_redis)
     claim = demo_claim()
     claim["destination"] = claim["origin"]
@@ -184,5 +186,7 @@ def test_cross_field_validation_error_is_reported_against_destination(monkeypatc
 
     assert response.status_code == 422
     assert any(error["field"] == "destination" for error in response.json()["errors"])
+    assert len(stored) == 1
+    assert isinstance(stored[0], api.Quarantine)
     assert fake_redis.incr_calls == 0
     assert fake_redis.lpush_calls == []
