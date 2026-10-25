@@ -74,25 +74,20 @@ def _rate_limited(client: str) -> bool:
 async def quarantine_invalid(request: Request, exc: RequestValidationError):
     """Invalid claims are stored in quarantine with field-level errors; no agent run starts."""
     raw = await request.body()
-    body = raw[:RAW_BODY_LIMIT].decode("utf-8", errors="ignore")
-    errors = []
-    for error in exc.errors():
-        field = ".".join(map(str, error["loc"][1:]))
-        message = error["msg"]
-        # Pydantic's model-level cross-field validators sometimes have no field
-        # location; map known rules back to the field the caller must correct.
-        if not field or field == "body":
-            if "origin and destination" in message:
-                field = "destination"
-            elif "notice_minutes_before_departure" in message:
-                field = "notice_minutes_before_departure"
-            elif "delay_minutes" in message:
-                field = "delay_minutes"
-            else:
-                field = "body"
-        errors.append({"field": field, "msg": message, "type": error["type"]})
+    body = raw[:RAW_BODY_LIMIT].decode("utf-8", errors="replace")
+    errors = [
+        {
+            "field": ".".join(map(str, error["loc"][1:])) or "body",
+            "msg": error["msg"],
+            "type": error["type"],
+        }
+        for error in exc.errors()
+    ]
     qid = None
     if request.url.path == "/v1/claims":
+        client = request.client.host if request.client else "unknown"
+        if _rate_limited(client):
+            return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
         with SessionLocal() as s, s.begin():
             q = Quarantine(raw_body=body, errors=errors, client_id=_client_id(request))
             s.add(q)
