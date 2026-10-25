@@ -11,3 +11,22 @@ jobs:
       - run: uv lock --check
       - run: uv run ruff check .
       - run: uv run pytest -q
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure local Compose environment
+        run: cp .env.example .env
+      - name: Build and start the real stack
+        run: docker compose up --build -d
+      - name: Verify the real s01 graph path
+        run: docker compose run --rm worker python scripts/smoke_s01.py
+      - name: Collect service logs on failure
+        if: failure()
+        run: docker compose logs --no-color ingest chroma worker
+      - name: Stop Compose services
+        if: always()
+        run: docker compose down -v
