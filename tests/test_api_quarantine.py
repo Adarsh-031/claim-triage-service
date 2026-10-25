@@ -86,13 +86,14 @@ def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     assert json.loads(quarantine.raw_body)["statement"] == claim["statement"]
     assert quarantine.client_id == "quarantine-test-client"
     assert len(quarantine.raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
-    assert fake_redis.incr_calls == 0
+    assert fake_redis.incr_calls == 1
     assert fake_redis.lpush_calls == []
 
 
 def test_quarantine_body_storage_is_capped(monkeypatch):
     stored = []
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", FakeRedis())
     claim = demo_claim()
     claim["statement"] = "x" * 18_000
 
@@ -196,6 +197,7 @@ def test_cross_field_validation_error_is_reported_against_destination(monkeypatc
 def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
     stored = []
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", FakeRedis())
     claim = demo_claim()
     claim["statement"] = "✈" * 7_000
 
