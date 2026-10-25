@@ -165,20 +165,20 @@ class Result(BaseModel):
 class RunState(TypedDict, total=False):
     """Partial state shared by LangGraph nodes; each node fills its own fields."""
 
-    # Existing graph state is authoritative until the graph migrates to Result.
     claim: dict[str, object]
     facts: dict[str, object]
     retrieved: list[dict[str, object]]
     draft: dict[str, object] | None
     verified: bool
     attempts: int
-    steps: int
+    step_count: int
+    started_at: float  # monotonic clock, local to the worker process
+    budget_exceeded: bool
     tool_calls: int
     trace: list[dict[str, object]]
-    recommendation: dict[str, object]
+    result: dict[str, object]
 
-    # TODO: migrate graph/API consumers from Recommendation to Result, then remove
-    # the legacy recommendation field and move result fields into a single Result.
+    # The worker adapts Result to the legacy Recommendation API payload.
     run_id: str
     prompt_version: str
     corpus_version: str

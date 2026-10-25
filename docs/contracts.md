@@ -70,9 +70,16 @@ Example file: [`docs/examples/result.json`](examples/result.json).
 
 ## RunState
 
-`RunState` is a partial `TypedDict` passed to LangGraph. The currently implemented graph still uses `retrieved`, `verified`, and `recommendation`; these remain the authoritative legacy graph fields for now. The contract avoids duplicating them as `chunks`, `verification_passed`, or a parallel set of flattened `Result` fields.
+`RunState` is a partial `TypedDict` passed to LangGraph. The graph uses `claim`, `facts`,
+`retrieved`, `draft`, and `result`, with `step_count`, `tool_calls`, a monotonic `started_at`,
+and a sticky `budget_exceeded` flag for budget enforcement. `result` holds a serialized,
+validated `Result`. The pass-through verifier leaves `verified=False`.
 
-TODO: migrate graph/API consumers from `Recommendation` to `Result` in a dedicated change. Once all consumers are migrated, replace the legacy `recommendation` field with a single typed result and remove the legacy model only after checking its API compatibility.
+The graph returns `Result`; the queue worker adapts it to the existing `Recommendation`
+API/store payload, preserving citation IDs, route, summary, amount, escalation reason, and
+mandatory human approval. Migrating the public API/store to `Result` remains separate work.
+
+See [the graph skeleton guide](agent-graph.md) for fixture provenance and budget semantics.
 
 ## Enums
 
