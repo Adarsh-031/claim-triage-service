@@ -204,3 +204,19 @@ def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
     assert response.status_code == 422
     assert len(stored) == 1
     assert len(stored[0].raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
+
+
+
+def test_invalid_claims_are_rate_limited_before_quarantine(monkeypatch):
+    stored = []
+    fake_redis = FakeRedis()
+    fake_redis.incr = lambda _key: api.settings.rate_limit_per_min + 1
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+
+    response = client.post("/v1/claims", json={"pnr": "bad"})
+
+    assert response.status_code == 429
+    assert stored == []
+    assert fake_redis.expire_calls == 1
+    assert fake_redis.lpush_calls == []
