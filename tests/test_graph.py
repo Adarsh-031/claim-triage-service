@@ -166,7 +166,7 @@ def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, in
     graph.research(state)
     assert search.call_count == invoked
     assert state["tool_calls"] == reserved
-    assert state.get("budget_exceeded", False) is (not invoked)
+    assert state.get("budget_exceeded", False) is (invoked < 2)
 
 
 def test_terminal_step_reservation_skips_node_side_effects():

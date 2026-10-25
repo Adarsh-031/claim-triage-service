@@ -131,7 +131,7 @@ def test_vector_backend_is_created_once_and_reused(monkeypatch):
             text = "Cancellation compensation."
             return {
                 "ids": [["CAR-S3-M-IV-R4:3.3.2:0001"]],
-                "documents": [[f"CAR-S3-M-IV-R4 > 3 Cancellation\\n{text}"]],
+                "documents": [[f"CAR-S3-M-IV-R4 > 3 Cancellation\n{text}"]],
                 "metadatas": [[{
                     "doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2",
                     "heading_path": ["3 Cancellation"],
@@ -163,7 +163,7 @@ def test_vector_backend_is_created_once_and_reused(monkeypatch):
 def test_vector_normalization_drops_source_hash_mismatch():
     result = corpus._normalize_chroma(
         ["bad-id"],
-        ["CAR-S3-M-IV-R4 > 3 Cancellation\\nnot the indexed source text"],
+        ["CAR-S3-M-IV-R4 > 3 Cancellation\nnot the indexed source text"],
         [{"doc_id": "CAR-S3-M-IV-R4", "clause_id": "3.3.2", "hash": "0" * 64}],
     )
     assert result == []
