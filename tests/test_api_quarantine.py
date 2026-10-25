@@ -270,4 +270,7 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     failed_span = [s for s in exporter.get_finished_spans() if s.name == "queue.process"][-1]
     assert failed_span.status.status_code == trace.StatusCode.ERROR
     assert any(event.name == "exception" for event in failed_span.events)
-    assert updates[-1]["result"]["escalation_reason"] == "PROVIDER_DEGRADED"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["result"] is None
+    assert updates[-1]["error"] == "provider unavailable"
+    assert updates[-1]["finished_at"] is not None
