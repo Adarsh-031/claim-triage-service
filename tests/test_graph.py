@@ -113,7 +113,10 @@ def test_expired_run_skips_all_work_nodes(monkeypatch):
 
 
 def test_unsupported_claim_escalates_instead_of_making_up_a_decision(monkeypatch):
-    monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=lambda _args: {"chunks": [], "retrieval_error": None}))
+    monkeypatch.setattr(
+        graph, "search_corpus",
+        SimpleNamespace(invoke=lambda _args: {"chunks": [], "retrieval_error": None}),
+    )
     result, _ = graph.run_agent({**SCENARIO["claim"], "disruption_type": "delay"})
     assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
     assert result.citations == []
