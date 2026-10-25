@@ -1,14 +1,27 @@
 """Versioned data contracts (D1). Every external interface validates against these."""
 from __future__ import annotations
 
+import unicodedata
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal, TypedDict
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CONTRACT_VERSION = "1.0"
+
+
+def _reject_control_or_zero_width(value: str | None) -> str | None:
+    """Reject non-printing control/format characters while allowing normal multiline text."""
+    if value is None:
+        return value
+    for char in value:
+        category = unicodedata.category(char)
+        # Newline, carriage return, and tab are normal passenger-statement whitespace.
+        if category in {"Cc", "Cf", "Cs"} and ord(char) not in {9, 10, 13}:
+            raise ValueError("must not contain control or zero-width characters")
+    return value
 
 
 class DisruptionType(StrEnum):
@@ -47,8 +60,8 @@ class ClaimIn(BaseModel):
     destination: str = Field(pattern=r"^[A-Z]{3}$")
     block_time_minutes: int | None = Field(default=None, ge=15, le=600)
     disruption_type: DisruptionType = DisruptionType.unknown
-    notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60)
-    delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
+    notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60, validate_default=True)
+    delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60, validate_default=True)
     reported_at_airport: bool | None = None
     contact_info_provided: bool | None = None
     stated_cause: str | None = Field(default=None, max_length=300)
@@ -56,18 +69,34 @@ class ClaimIn(BaseModel):
     ticket_fare_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     statement: str = Field(min_length=10, max_length=4000, description="Passenger's own account")
 
-    @model_validator(mode="after")
-    def cross_field(self) -> ClaimIn:
-        if self.origin == self.destination:
+    @field_validator("statement", "stated_cause")
+    @classmethod
+    def reject_hidden_characters(cls, value: str | None) -> str | None:
+        return _reject_control_or_zero_width(value)
+
+    @field_validator("destination")
+    @classmethod
+    def route_must_differ(cls, value: str, info) -> str:
+        if info.data.get("origin") == value:
             raise ValueError("origin and destination must differ")
-        if self.disruption_type == DisruptionType.delay and self.delay_minutes is None:
+        return value
+
+    @field_validator("notice_minutes_before_departure")
+    @classmethod
+    def cancellation_requires_notice(cls, value: int | None, info) -> int | None:
+        if info.data.get("disruption_type") == DisruptionType.cancellation and value is None:
+            raise ValueError("notice_minutes_before_departure is required for cancellation")
+        return value
+
+    @field_validator("delay_minutes")
+    @classmethod
+    def delay_matches_disruption(cls, value: int | None, info) -> int | None:
+        disruption = info.data.get("disruption_type")
+        if disruption == DisruptionType.delay and value is None:
             raise ValueError("delay_minutes is required when disruption_type is 'delay'")
-        if (
-            self.disruption_type in (DisruptionType.cancellation, DisruptionType.denied_boarding)
-            and self.delay_minutes
-        ):
+        if disruption in (DisruptionType.cancellation, DisruptionType.denied_boarding) and value:
             raise ValueError("delay_minutes does not apply to cancellation or denied_boarding")
-        return self
+        return value
 
 
 class Route(StrEnum):

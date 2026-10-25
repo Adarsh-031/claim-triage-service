@@ -175,3 +175,36 @@ def test_all_required_escalation_reasons_exist():
 def test_run_state_accepts_partial_graph_state():
     state: RunState = {"claim": {"pnr": "AB12CD"}, "route": Route.ESCALATE, "trace": []}
     assert state["route"] is Route.ESCALATE
+
+
+
+def test_claim_rejects_control_characters_in_statement():
+    scenario = json.loads((ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())
+    scenario["claim"]["statement"] += "\x01"
+    with pytest.raises(ValidationError, match="control or zero-width"):
+        ClaimIn.model_validate(scenario["claim"])
+
+
+def test_claim_rejects_zero_width_characters_in_statement_and_cause():
+    scenario = json.loads((ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())
+    scenario["claim"]["statement"] = scenario["claim"]["statement"] + "\u200b"
+    with pytest.raises(ValidationError, match="control or zero-width"):
+        ClaimIn.model_validate(scenario["claim"])
+
+    scenario["claim"]["statement"] = "A normal passenger statement with enough characters."
+    scenario["claim"]["stated_cause"] = "technical\u200b fault"
+    with pytest.raises(ValidationError, match="control or zero-width"):
+        ClaimIn.model_validate(scenario["claim"])
+
+
+def test_cancellation_requires_notice_minutes_before_departure():
+    scenario = json.loads((ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())
+    scenario["claim"].pop("notice_minutes_before_departure")
+    with pytest.raises(ValidationError, match="notice_minutes_before_departure is required"):
+        ClaimIn.model_validate(scenario["claim"])
+
+
+def test_valid_cancellation_claim_remains_valid_with_notice():
+    scenario = json.loads((ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())
+    claim = ClaimIn.model_validate(scenario["claim"])
+    assert claim.notice_minutes_before_departure == 90

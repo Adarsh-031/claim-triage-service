@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, String, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .settings import settings
@@ -33,9 +33,10 @@ class Run(Base):
 class Quarantine(Base):
     __tablename__ = "quarantine"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    payload: Mapped[str] = mapped_column(Text)
+    raw_body: Mapped[str] = mapped_column(Text)
     errors: Mapped[list] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    client_id: Mapped[str] = mapped_column(String(255), default="unknown")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Feedback(Base):
@@ -53,6 +54,11 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+
+
+def list_quarantine(limit: int = 50) -> list[Quarantine]:
+    with SessionLocal() as s:
+        return list(s.scalars(select(Quarantine).order_by(Quarantine.received_at.desc()).limit(limit)))
 
 
 def get_run(run_id: uuid.UUID) -> Run | None:

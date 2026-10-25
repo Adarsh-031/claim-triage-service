@@ -1,0 +1,16 @@
+{
+  "id": "s28_malformed_zero_width_cause",
+  "description": "A zero-width character in stated_cause is rejected and quarantined.",
+  "claim": {
+    "pnr": "ABC123",
+    "airline_code": "6E",
+    "flight_number": "6E512",
+    "flight_date": "2026-10-14",
+    "origin": "BLR",
+    "destination": "DEL",
+    "disruption_type": "unknown",
+    "stated_cause": "technical\u200b fault",
+    "statement": "I need assistance with the reported disruption on this flight."
+  },
+  "expected": {"route": "quarantine", "must_cite": []}
+}
