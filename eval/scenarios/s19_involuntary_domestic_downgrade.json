@@ -1,0 +1,12 @@
+{
+  "id": "s19_involuntary_domestic_downgrade",
+  "description": "Passenger with a domestic business-class ticket was involuntarily seated in economy.",
+  "claim": {
+    "pnr": "DW019A", "airline_code": "6E", "flight_number": "6E919",
+    "flight_date": "2026-11-30", "origin": "BLR", "destination": "DEL",
+    "block_time_minutes": 165, "disruption_type": "downgrade",
+    "reported_at_airport": true, "contact_info_provided": true, "ticket_fare_inr": 18000,
+    "statement": "I purchased a business-class ticket for a domestic flight. The airline moved me to an economy seat involuntarily and did not refund any part of the fare."
+  },
+  "expected": {"route": "pay_as_computed", "must_cite": ["3.5.1"], "must_include_entitlement": "domestic involuntary downgrade reimbursement"}
+}

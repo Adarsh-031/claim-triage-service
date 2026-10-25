@@ -1,0 +1,13 @@
+{
+  "id": "s20_cancel_contact_evidence_unknown",
+  "description": "Cancellation claim lacks evidence about whether the passenger supplied contact information at booking.",
+  "claim": {
+    "pnr": "CA020A", "airline_code": "6E", "flight_number": "6E020",
+    "flight_date": "2026-12-01", "origin": "HYD", "destination": "MAA",
+    "block_time_minutes": 80, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 90, "reported_at_airport": true,
+    "contact_info_provided": null,
+    "statement": "My flight was cancelled 90 minutes before departure. I do not know what contact information was saved with my booking and have not yet provided the booking receipt."
+  },
+  "expected": {"route": "request_further_evidence", "must_cite": ["3.3.2", "3.3.3"], "must_include_entitlement": "booking contact information"}
+}

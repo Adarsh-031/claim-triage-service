@@ -1,0 +1,14 @@
+{
+  "id": "s06_cancel_missing_contact",
+  "description": "Late-notice cancellation with no contact information on the booking and an alternate accepted at the airport.",
+  "claim": {
+    "pnr": "CA006A", "airline_code": "6E", "flight_number": "6E606",
+    "flight_date": "2026-11-17", "origin": "DEL", "destination": "BLR",
+    "block_time_minutes": 165, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 180, "reported_at_airport": true,
+    "contact_info_provided": false,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 240},
+    "statement": "The airline cancelled my flight three hours before departure. I had not supplied email or phone details when booking, and I accepted the alternate flight while waiting at the airport."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.3.3", "3.8.1(a)"], "must_include_entitlement": "meals_and_refreshments", "must_not": "financial compensation when booking contact information was absent"}
+}

@@ -1,0 +1,12 @@
+{
+  "id": "s09_delay_two_hours_long_block",
+  "description": "A 120-minute delay on a 165-minute block-time flight is below the three-hour facility threshold.",
+  "claim": {
+    "pnr": "DL009A", "airline_code": "6E", "flight_number": "6E909",
+    "flight_date": "2026-11-20", "origin": "DEL", "destination": "CCU",
+    "block_time_minutes": 165, "disruption_type": "delay", "delay_minutes": 120,
+    "reported_at_airport": true, "contact_info_provided": true,
+    "statement": "I checked in on time for a flight with a two-hour-45-minute block time. It departed two hours late. I want meal compensation."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.4.1"], "must_not": "mandatory meals under the three-hour threshold for this block-time band"}
+}

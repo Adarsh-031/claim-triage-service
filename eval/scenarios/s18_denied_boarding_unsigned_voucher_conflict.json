@@ -1,0 +1,13 @@
+{
+  "id": "s18_denied_boarding_unsigned_voucher_conflict",
+  "description": "IndiGo issued a non-encashable denied-boarding voucher without the passenger's signed agreement.",
+  "claim": {
+    "pnr": "DB018A", "airline_code": "6E", "flight_number": "6E818",
+    "flight_date": "2026-11-29", "origin": "DEL", "destination": "GOI",
+    "block_time_minutes": 170, "disruption_type": "denied_boarding",
+    "reported_at_airport": true, "contact_info_provided": true,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 150},
+    "statement": "I was denied boarding against my will. IndiGo issued a non-encashable travel voucher, but I did not sign an agreement to accept a voucher. I request the compensation required by the CAR."
+  },
+  "expected": {"route": "escalate", "escalation_reason": "PROVISION_CONFLICT", "must_cite": ["3.2.2", "3.7.1", "10.2"]}
+}

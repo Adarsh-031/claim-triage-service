@@ -1,0 +1,14 @@
+{
+  "id": "s03_cancel_notice_under_two_weeks",
+  "description": "Cancellation notice 10 days ahead with an alternate accepted: apply the notice and alternate rules, not automatic compensation.",
+  "claim": {
+    "pnr": "CA003A", "airline_code": "6E", "flight_number": "6E303",
+    "flight_date": "2026-11-10", "origin": "BLR", "destination": "DEL",
+    "block_time_minutes": 165, "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 14400, "reported_at_airport": true,
+    "contact_info_provided": true,
+    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 120},
+    "statement": "The airline cancelled my flight 10 days before departure and offered an alternate flight, which I accepted. I request cancellation compensation."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.3.1"], "must_not": "cancellation compensation solely because notice was under two weeks"}
+}

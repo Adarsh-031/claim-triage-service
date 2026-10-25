@@ -1,0 +1,12 @@
+{
+  "id": "s08_delay_two_hours_short_block",
+  "description": "A checked-in passenger's 120-minute delay on a flight with a 120-minute block time crosses the two-hour facility threshold.",
+  "claim": {
+    "pnr": "DL008A", "airline_code": "6E", "flight_number": "6E808",
+    "flight_date": "2026-11-19", "origin": "BLR", "destination": "HYD",
+    "block_time_minutes": 120, "disruption_type": "delay", "delay_minutes": 120,
+    "reported_at_airport": true, "contact_info_provided": true,
+    "statement": "I checked in on time for a two-hour flight. It was delayed by exactly two hours. I request cash compensation for the delay."
+  },
+  "expected": {"route": "decline", "must_cite": ["3.4.1", "3.8.1(a)"], "must_include_entitlement": "meals_and_refreshments"}
+}
