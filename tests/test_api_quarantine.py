@@ -70,7 +70,7 @@ def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     monkeypatch.setattr(api, "r", fake_redis)
 
     claim = demo_claim()
-    claim["statement"] += "\\u0001"
+    claim["statement"] += chr(1)
     response = client.post(
         "/v1/claims",
         json=claim,
@@ -84,7 +84,7 @@ def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     assert len(stored) == 1
     quarantine = stored[0]
     assert isinstance(quarantine, api.Quarantine)
-    assert json.loads(quarantine.raw_body)["statement"].endswith("\\u0001")
+    assert json.loads(quarantine.raw_body)["statement"] == claim["statement"]
     assert quarantine.client_id == "quarantine-test-client"
     assert len(quarantine.raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
     assert fake_redis.incr_calls == 0
