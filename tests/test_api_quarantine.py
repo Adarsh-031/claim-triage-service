@@ -230,6 +230,25 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from worker import main as worker
+    from worker.agent import graph as agent_graph
+
+    monkeypatch.setattr(
+        agent_graph,
+        "search_corpus",
+        SimpleNamespace(invoke=lambda _args: {
+            "chunks": [{
+                "chunk_id": "TRACE-CAR:3.3.2:0001",
+                "doc_id": "TRACE-CAR",
+                "clause_id": "3.3.2",
+                "heading_path": ["3 Cancellation"],
+                "text": "Cancellation compensation passage.",
+                "hash": "a" * 64,
+                "page": None,
+                "refs": [],
+            }],
+            "retrieval_error": None,
+        }),
+    )
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
