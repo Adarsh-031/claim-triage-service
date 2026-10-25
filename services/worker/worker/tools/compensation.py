@@ -118,29 +118,53 @@ def _base_fare(inputs: dict[str, Any]) -> tuple[Decimal, dict[str, Any]]:
 def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
     clause = "3.3.2"
     alternate_accepted = inputs.get("alternate_flight_accepted")
-    if alternate_accepted is None:
-        return _needs_evidence(clause, "alternate_flight_accepted")
-    alternate_accepted = _boolean(alternate_accepted, "alternate_flight_accepted")
+    if alternate_accepted is not None:
+        alternate_accepted = _boolean(alternate_accepted, "alternate_flight_accepted")
 
     refund_taken = inputs.get("refund_taken")
     if refund_taken is not None:
         refund_taken = _boolean(refund_taken, "refund_taken")
     if alternate_accepted and refund_taken:
         raise ValueError("alternate_flight_accepted and refund_taken cannot both be true")
-
-    used: dict[str, Any] = {"alternate_flight_accepted": alternate_accepted}
-    if refund_taken is not None:
-        used["refund_taken"] = refund_taken
-    if alternate_accepted:
-        return _zero(clause, "alternate accepted, 3.3.2", used)
-
     notice = inputs.get("notice_minutes_before_departure")
     if notice is None:
+        if alternate_accepted:
+            used = {"alternate_flight_accepted": True}
+            if refund_taken is not None:
+                used["refund_taken"] = refund_taken
+            return _zero(clause, "alternate accepted, 3.3.2", used)
         return _needs_evidence(clause, "notice_minutes_before_departure")
     notice = _integer(notice, "notice_minutes_before_departure")
 
-    # CAR 3.3.1 requires an acceptable alternate/refund at 24 hours and two weeks.
-    # The acceptance fact is required at every notice level; never infer it.
+    used: dict[str, Any] = {"notice_minutes_before_departure": notice}
+    if refund_taken is not None:
+        used["refund_taken"] = refund_taken
+
+    # CAR 3.3.1: at least two weeks' notice is outside the 3.3.2 compensation trigger.
+    if notice >= 14 * 24 * 60:
+        return _zero("3.3.1", "informed 2+ weeks ahead, 3.3.1", used)
+
+    # Between 24 hours and two weeks, an alternate or refund offered as acceptable
+    # to the passenger satisfies 3.3.1. At exactly 24 hours this band still applies.
+    if notice >= 24 * 60:
+        offered = inputs.get("alternate_or_refund_offered")
+        if offered is None:
+            return _needs_evidence(clause, "alternate_or_refund_offered")
+        offered = _boolean(offered, "alternate_or_refund_offered")
+        used["alternate_or_refund_offered"] = offered
+        if offered:
+            return _zero(
+                "3.3.1",
+                "alternate or refund offered, 3.3.1",
+                used,
+            )
+
+    if alternate_accepted is None:
+        return _needs_evidence(clause, "alternate_flight_accepted")
+    used["alternate_flight_accepted"] = alternate_accepted
+    if alternate_accepted:
+        return _zero(clause, "alternate accepted, 3.3.2", used)
+
     needed = [
         key
         for key in ("block_time_minutes", "one_way_basic_fare_inr", "airline_fuel_charge_inr")
@@ -153,29 +177,37 @@ def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
     fare_total, fare_inputs = _base_fare(inputs)
 
     # CAR 3.3.2(a)-(c): inclusive upper band edges at 60 and 120 minutes.
-    upper, cap, tier_clause = next(
+    _, cap, tier_clause = next(
         tier for tier in CANCELLATION_TIERS if tier[0] is None or block <= tier[0]
     )
     return _computed(
         amount=min(cap, fare_total),
         formula=f"min(INR {cap}, booked one-way basic fare + airline fuel charge)",
         clause_id=tier_clause,
-        inputs_used={
-            "notice_minutes_before_departure": notice,
-            **used,
-            "block_time_minutes": block,
-            **fare_inputs,
-        },
+        inputs_used={**used, "block_time_minutes": block, **fare_inputs},
     )
 
 
 def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
     clause = "3.2.2"
-    if inputs.get("alternate_arranged") is None:
-        return _needs_evidence(clause, "alternate_arranged")
-    alternate = _boolean(inputs["alternate_arranged"], "alternate_arranged")
+    declined = inputs.get("alternate_declined")
+    if declined is None:
+        return _needs_evidence(clause, "alternate_declined")
+    declined = _boolean(declined, "alternate_declined")
 
-    if alternate:
+    alternate = inputs.get("alternate_arranged")
+    if declined:
+        used: dict[str, Any] = {"alternate_declined": True}
+        if alternate is not None:
+            used["alternate_arranged"] = _boolean(alternate, "alternate_arranged")
+        subclause, multiplier, cap = "3.2.2(c)", Decimal(4), Decimal(20000)
+        formula = "min(400% × (booked one-way basic fare + airline fuel charge), INR 20,000)"
+    else:
+        if alternate is None:
+            return _needs_evidence(clause, "alternate_arranged")
+        alternate = _boolean(alternate, "alternate_arranged")
+        if not alternate:
+            return _needs_evidence(clause, "alternate_choice")
         delay = inputs.get("alternate_departure_delay_minutes")
         if delay is None:
             return _needs_evidence(clause, "alternate_departure_delay_minutes")
@@ -184,23 +216,13 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
             return _zero(
                 clause,
                 "alternate arranged to depart within one hour, 3.2.2",
-                {"alternate_arranged": True, "alternate_departure_delay_minutes": delay},
+                {
+                    "alternate_arranged": True,
+                    "alternate_declined": False,
+                    "alternate_departure_delay_minutes": delay,
+                },
             )
-
-    missing = [
-        key
-        for key in ("one_way_basic_fare_inr", "airline_fuel_charge_inr")
-        if inputs.get(key) is None
-    ]
-    if missing:
-        return _needs_evidence(clause, *missing)
-    fare_total, fare_inputs = _base_fare(inputs)
-    used: dict[str, Any] = {"alternate_arranged": alternate, **fare_inputs}
-
-    if not alternate:
-        subclause, multiplier, cap = "3.2.2(c)", Decimal(4), Decimal(20000)
-        formula = "min(400% × (booked one-way basic fare + airline fuel charge), INR 20,000)"
-    else:
+        used = {"alternate_arranged": True, "alternate_declined": False}
         used["alternate_departure_delay_minutes"] = delay
         _, multiplier, cap, subclause = next(
             tier for tier in DENIED_BOARDING_ALTERNATE_TIERS if tier[0] is None or delay <= tier[0]
@@ -210,11 +232,19 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
         else:
             formula = "min(400% × (booked one-way basic fare + airline fuel charge), INR 20,000)"
 
+    missing = [
+        key
+        for key in ("one_way_basic_fare_inr", "airline_fuel_charge_inr")
+        if inputs.get(key) is None
+    ]
+    if missing:
+        return _needs_evidence(clause, *missing)
+    fare_total, fare_inputs = _base_fare(inputs)
     return _computed(
         amount=min(multiplier * fare_total, cap),
         formula=formula,
         clause_id=subclause,
-        inputs_used=used,
+        inputs_used={**used, **fare_inputs},
     )
 
 

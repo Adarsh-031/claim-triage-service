@@ -29,16 +29,20 @@ the calculator must return `needs_evidence` for the missing fields.
 
 ## Cancellation — CAR 3.3.2
 
-Compensation is available only when the passenger was not informed in accordance
-with 3.3.1. The 3.3.1 arrangements depend on notice: at least two weeks, the airline
-must inform the passenger and arrange an acceptable alternate flight/refund; under
-two weeks and up to 24 hours, it must offer an alternate or refund acceptable to the
-passenger. The calculator requires `alternate_flight_accepted` at every notice level;
-a missing value returns `needs_evidence`. `refund_taken` is a separate input and does
-not reduce or suppress the compensation amount: a passenger who takes the refund
-remains eligible for the 3.3.2 compensation tier. Only an accepted alternate returns
-zero, with reason `alternate accepted, 3.3.2`. Notice is also required to compute a
-tier, and missing facts are never inferred from notice time alone.
+Compensation under 3.3.2 applies when the passenger was not informed as required by
+3.3.1. The notice bands are handled explicitly:
+
+- At least 14 days (20,160 minutes): return zero with reason
+  `informed 2+ weeks ahead, 3.3.1`.
+- Less than 14 days and at least 24 hours (1,440 minutes): require
+  `alternate_or_refund_offered`; if true, return zero under 3.3.1. If false, continue
+  to 3.3.2, still requiring `alternate_flight_accepted` to be known.
+- Less than 24 hours: use 3.3.2 directly, but require
+  `alternate_flight_accepted`; a missing value returns `needs_evidence`.
+
+`refund_taken` is separate and does not reduce or suppress a 3.3.2 tier. Only an
+accepted alternate returns zero with reason `alternate accepted, 3.3.2`. The full
+refund is a separate entitlement; this function returns the compensation amount only.
 
 | Block time | Compensation | Clause |
 | --- | --- | --- |
@@ -58,10 +62,12 @@ original and connecting flight facts.
 | Scheduled to depart within 1 hour (60 minutes) of original departure | No compensation | 3.2.2 |
 | More than 1 hour and within 24 hours (up to and including 1,440 minutes) | Lesser of 200% of (booked one-way basic fare + airline fuel charge) or INR 10,000 | 3.2.2(a) |
 | More than 24 hours (over 1,440 minutes) | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000 | 3.2.2(b) |
-| Passenger does not opt for an alternate flight | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000, plus full ticket refund | 3.2.2(c) |
+| Passenger declines the alternate flight (`alternate_declined=true`) | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000, plus full ticket refund | 3.2.2(c) |
 
-When no alternate is arranged, `alternate_arranged` must be `false`; no departure
-interval is then needed. The ticket refund in (c) is not included in `amount`.
+Clause (c) is selected from the passenger's explicit choice, not merely because the
+airline did not arrange an alternate. If there is no arrangement and no explicit
+passenger choice, the calculator requests evidence. The ticket refund in (c) is not
+included in `amount`.
 
 ## Downgrading — CAR 3.5.1
 
