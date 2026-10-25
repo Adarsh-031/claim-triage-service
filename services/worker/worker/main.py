@@ -23,7 +23,13 @@ def handle(job: dict) -> None:
         return
     update_run(run_id, status=RunStatus.running.value)
     try:
-        rec, trace = run_agent(run.claim, correlation_id=job.get("cid", ""))
+        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id))
+        # Preserve the API/store contract while the graph emits the stable Result.
+        rec = Recommendation(
+            route=result.route, summary=result.summary, compensation_inr=result.amount,
+            citations=result.citations, escalation_reason=result.escalation_reason,
+            verified=False,
+        )
     except Exception as e:
         log.exception(json.dumps(f"run {run_id} failed"))
         rec = Recommendation(route=Route.escalate, summary="Run failed; routed to a human officer.",
