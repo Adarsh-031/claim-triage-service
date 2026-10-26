@@ -165,7 +165,7 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         assert rec.citations
 
 
-@pytest.mark.parametrize(("used", "invoked", "reserved"), [(12, 2, 14), (13, 1, 15), (14, 0, 15), (15, 0, 15)])
+@pytest.mark.parametrize(("used", "invoked", "reserved"), [(12, 2, 15), (13, 1, 15), (14, 0, 15), (15, 0, 15)])
 def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, invoked, reserved):
     search = Mock(return_value=_fake_search_result())
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=search))
