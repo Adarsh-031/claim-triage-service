@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import time
+import logging
 from typing import Protocol
 from uuid import uuid4
 
@@ -11,6 +12,8 @@ import redis
 from triage_common.settings import settings
 
 from ..metrics import LLM_BREAKER_STATE
+
+log = logging.getLogger(__name__)
 
 
 class LLM(Protocol):
@@ -26,7 +29,12 @@ class CircuitBreaker:
 
     def __init__(self, threshold: int, window_s: float, reset_s: float, client=None, name: str = "primary"):
         self.threshold, self.window_s, self.reset_s = threshold, window_s, reset_s
-        self.client = client or redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.client = client or redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_timeout=1.0,
+            socket_connect_timeout=1.0,
+        )
         self.name = name
         self.failures_key = f"llm:breaker:{name}:failures"
         self.open_key = f"llm:breaker:{name}:opened"
@@ -43,45 +51,77 @@ class CircuitBreaker:
 
     @property
     def state(self) -> str:
-        return self._state()
+        try:
+            return self._state()
+        except redis.RedisError:
+            log.warning("Redis unavailable while reading %s circuit state; treating breaker as closed", self.name)
+            return "closed"
 
     def before(self) -> None:
-        state = self._state()
+        probe_acquired = False
+        try:
+            state = self._state()
+            if state == "half_open":
+                token = uuid4().hex
+                acquired = self.client.set(
+                    self.probe_key, token, nx=True,
+                    px=max(1000, int(settings.llm_timeout_s * 1000)),
+                )
+                if not acquired:
+                    state = "open"
+                else:
+                    self.probe_token = token
+                    probe_acquired = True
+        except redis.RedisError:
+            log.warning("Redis unavailable before %s call; treating breaker as closed", self.name)
+            return
         LLM_BREAKER_STATE.labels(self.name).set({"closed": 0, "open": 1, "half_open": 2}[state])
         if state == "open":
             raise CircuitOpen("provider circuit open")
-        if state == "half_open":
-            token = uuid4().hex
-            acquired = self.client.set(self.probe_key, token, nx=True, px=max(1000, int(settings.llm_timeout_s * 1000)))
-            if not acquired:
-                raise CircuitOpen("provider circuit half-open probe already in progress")
-            self.probe_token = token
+        if state == "half_open" and not probe_acquired:
+            raise CircuitOpen("provider circuit half-open probe already in progress")
 
     def success(self) -> None:
-        self.client.delete(self.failures_key, self.open_key)
-        self._release_probe()
+        try:
+            self.client.delete(self.failures_key, self.open_key)
+        except redis.RedisError:
+            log.warning("Redis unavailable after successful %s call; breaker state may be stale", self.name)
+        finally:
+            self._release_probe()
         LLM_BREAKER_STATE.labels(self.name).set(0)
 
     def failure(self) -> None:
-        now = time.time()
-        pipeline = self.client.pipeline()
-        pipeline.zremrangebyscore(self.failures_key, "-inf", now - self.window_s)
-        pipeline.zadd(self.failures_key, {f"{now}:{uuid4().hex}": now})
-        pipeline.expire(self.failures_key, max(1, int(self.window_s) + 1))
-        pipeline.zcard(self.failures_key)
-        count = pipeline.execute()[-1]
-        if self.state == "half_open" or count >= self.threshold:
-            self.client.set(self.open_key, str(now), ex=max(1, int(self.reset_s) + 3600))
-        self._release_probe()
-        LLM_BREAKER_STATE.labels(self.name).set(1 if self.state == "open" else 0)
+        try:
+            now = time.time()
+            state = self._state()
+            pipeline = self.client.pipeline()
+            pipeline.zremrangebyscore(self.failures_key, "-inf", now - self.window_s)
+            pipeline.zadd(self.failures_key, {f"{now}:{uuid4().hex}": now})
+            pipeline.expire(self.failures_key, max(1, int(self.window_s) + 1))
+            pipeline.zcard(self.failures_key)
+            count = pipeline.execute()[-1]
+            if state == "half_open":
+                self.client.set(self.open_key, str(now), ex=max(1, int(self.reset_s) + 3600))
+            elif state == "closed" and count >= self.threshold:
+                self.client.set(self.open_key, str(now), ex=max(1, int(self.reset_s) + 3600), nx=True)
+        except redis.RedisError:
+            log.warning("Redis unavailable after failed %s call; treating breaker as closed", self.name)
+        finally:
+            self._release_probe()
+        state = self.state
+        LLM_BREAKER_STATE.labels(self.name).set({"closed": 0, "open": 1, "half_open": 2}[state])
 
     def _release_probe(self) -> None:
         if self.probe_token:
-            self.client.eval(
-                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
-                1, self.probe_key, self.probe_token,
-            )
-            self.probe_token = None
+            try:
+                self.client.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
+                    1, self.probe_key, self.probe_token,
+                )
+            except redis.RedisError:
+                log.warning("Redis unavailable while releasing %s half-open probe", self.name)
+            finally:
+                self.probe_token = None
 
 
 class OpenAICompatibleLLM:
@@ -113,10 +153,12 @@ class OpenAICompatibleLLM:
 class ResilientLLM:
     """primary -> (retries w/ backoff+jitter) -> breaker -> fallback model -> raise (caller escalates)."""
 
-    def __init__(self, primary: LLM, fallback: LLM | None, breaker: CircuitBreaker | None = None):
+    def __init__(self, primary: LLM, fallback: LLM | None, breaker: CircuitBreaker | None = None,
+                 provider_name: str | None = None):
         self.primary, self.fallback = primary, fallback
         self.breaker = breaker or CircuitBreaker(
-            settings.breaker_fail_threshold, settings.breaker_window_s, settings.breaker_reset_s
+            settings.breaker_fail_threshold, settings.breaker_window_s, settings.breaker_reset_s,
+            name=provider_name or settings.llm_provider,
         )
 
     def chat(self, messages, tools=None):
@@ -129,6 +171,8 @@ class ResilientLLM:
                     return out
                 except (httpx.HTTPError, KeyError):
                     self.breaker.failure()
+                    if self.breaker.state != "closed":
+                        break
                     if attempt + 1 < settings.retry_max:
                         time.sleep(min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3))
             raise CircuitOpen("primary exhausted retries")
@@ -162,4 +206,4 @@ def get_llm() -> LLM:
         settings.llm_model_primary,
         settings.openrouter_api_key,
     )
-    return ResilientLLM(primary, fallback)
+    return ResilientLLM(primary, fallback, provider_name=settings.llm_provider)
