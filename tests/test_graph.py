@@ -142,6 +142,11 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
 
     monkeypatch.setattr(worker_main, "run_agent", checked_run_agent)
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=lambda _args: _fake_search_result()))
+    chunks = _sample_chunks()
+    monkeypatch.setattr(graph, "get_clause", SimpleNamespace(invoke=lambda args: {
+        "chunk": next(chunk for chunk in chunks if chunk["clause_id"] == args["clause_id"]),
+        "retrieval_error": None,
+    }))
     if budget_exhausted:
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     worker_main.handle({"run_id": str(run_id), "cid": "worker-test"})
@@ -198,6 +203,11 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
 
     monkeypatch.setattr(graph, "_stub_draft", consequential_draft)
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=lambda _args: _fake_search_result()))
+    chunks = _sample_chunks()
+    monkeypatch.setattr(graph, "get_clause", SimpleNamespace(invoke=lambda args: {
+        "chunk": next(chunk for chunk in chunks if chunk["clause_id"] == args["clause_id"]),
+        "retrieval_error": None,
+    }))
     updates = []
     run_id = uuid4()
     monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
