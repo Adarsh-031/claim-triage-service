@@ -198,7 +198,7 @@ def test_worker_does_not_execute_when_compare_and_set_claim_is_lost(monkeypatch)
         "run_agent",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not execute duplicate")),
     )
-    assert worker_main._handle({"run_id": str(run_id)}) is True
+    assert worker_main._handle({"run_id": str(run_id)}) is False
 
 
 def test_completed_run_uses_done_status_and_lifecycle_timestamps(monkeypatch):
@@ -270,6 +270,23 @@ def test_consume_once_leaves_processing_entry_when_attempt_loses_ownership(monke
     raw = json.dumps({"run_id": str(uuid4())})
     r = FakeRedis(queue=[raw])
     monkeypatch.setattr(worker_main, "handle", lambda _job: False)
+    assert worker_main.consume_once(r) is False
+    assert r.lists["triage:runs"] == []
+    assert r.lists["triage:runs:processing"] == [raw]
+
+
+def test_consume_once_keeps_entry_when_worker_claim_is_lost(monkeypatch):
+    run_id = uuid4()
+    raw = json.dumps({"run_id": str(run_id)})
+    r = FakeRedis(queue=[raw])
+    run = SimpleNamespace(status=RunStatus.queued.value, claim={"claim": "example"})
+    monkeypatch.setattr(worker_main, "get_run", lambda _run_id: run)
+    monkeypatch.setattr(worker_main, "claim_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        worker_main,
+        "run_agent",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not execute duplicate")),
+    )
     assert worker_main.consume_once(r) is False
     assert r.lists["triage:runs"] == []
     assert r.lists["triage:runs:processing"] == [raw]
