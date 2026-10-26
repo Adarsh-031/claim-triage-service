@@ -32,6 +32,11 @@ def _fake_search_result():
 
 def test_s01_returns_valid_cited_result_and_ordered_trace(monkeypatch):
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=lambda _args: _fake_search_result()))
+    chunks = _sample_chunks()
+    monkeypatch.setattr(graph, "get_clause", SimpleNamespace(invoke=lambda args: {
+        "chunk": next(chunk for chunk in chunks if chunk["clause_id"] == args["clause_id"]),
+        "retrieval_error": None,
+    }))
     run_id = str(uuid4())
     result, trace = graph.run_agent(SCENARIO["claim"], "test-cid", run_id=run_id)
 
@@ -159,6 +164,11 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
 def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, invoked, reserved):
     search = Mock(return_value=_fake_search_result())
     monkeypatch.setattr(graph, "search_corpus", SimpleNamespace(invoke=search))
+    chunks = _sample_chunks()
+    monkeypatch.setattr(graph, "get_clause", SimpleNamespace(invoke=lambda args: {
+        "chunk": next(chunk for chunk in chunks if chunk["clause_id"] == args["clause_id"]),
+        "retrieval_error": None,
+    }))
     state = {
         "claim": SCENARIO["claim"], "facts": {"disruption_type": "cancellation"},
         "started_at": graph.time.monotonic(), "step_count": 2, "tool_calls": used,
@@ -166,7 +176,7 @@ def test_research_reserves_budget_before_tool_side_effects(monkeypatch, used, in
     graph.research(state)
     assert search.call_count == invoked
     assert state["tool_calls"] == reserved
-    assert state.get("budget_exceeded", False) is (invoked < 2)
+    assert state.get("budget_exceeded", False) is (reserved >= 15)
 
 
 def test_terminal_step_reservation_skips_node_side_effects():

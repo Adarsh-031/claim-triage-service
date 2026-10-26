@@ -25,7 +25,7 @@ searches with no result above the vector similarity threshold escalate with `OUT
 `search_corpus(query, k=5, doc_id=None, mode="vector")` returns a dictionary with `chunks`
 and `retrieval_error`. Supported document IDs are `CAR-S3-M-IV-R4` (DGCA regulatory floor),
 `INDIGO-COC-DOM` (domestic carriage), and `INDIGO-COC-INTL` (international carriage).
-Vector matches below the minimum cosine-similarity threshold are discarded. Retrieved passage
+Vector matches below the minimum cosine-similarity threshold are discarded. Vector candidates are reranked with reciprocal-rank fusion (RRF) over BM25 rankings so broad parent sections do not crowd out relevant clause-level evidence. Ingestion reports this reranked shortlist separately from BM25 top-three results. Retrieved passage
 text is accepted only when its SHA-256 hash matches the indexed metadata. `get_clause` looks up
 the exact normalized chunk from `chunks.jsonl` and returns a copy so callers cannot mutate the
 shared cache.

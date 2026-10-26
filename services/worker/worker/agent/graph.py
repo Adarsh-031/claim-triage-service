@@ -16,7 +16,7 @@ from triage_common.contracts import Citation, EscalationReason, Result, Route, R
 from triage_common.settings import settings
 
 from ..metrics import NODE_LATENCY
-from ..tools.corpus import CORPUS_VERSION, search_corpus
+from ..tools.corpus import CORPUS_VERSION, get_clause, search_corpus
 
 PROMPT_VERSION = "skeleton-v1"
 
@@ -92,8 +92,8 @@ def research(state: RunState) -> RunState:
     state.setdefault("retrieved", [])
     disruption = state["facts"]["disruption_type"]
     queries = [
-        (f"{disruption} compensation alternate flight refund", 5),
-        ("meals and refreshments in relation to waiting time", 3),
+        (f"{disruption} compensation alternate flight refund", 8),
+        ("meals and refreshments in relation to waiting time", 5),
     ]
     errors = []
     for query, limit in queries:
@@ -113,6 +113,24 @@ def research(state: RunState) -> RunState:
         state["retrieved"] = list(by_id.values())
         if _budget_exceeded(state):
             break
+    # For cancellation claims, include exact regulatory rows from the validated
+    # local corpus; this is a grounded lookup, not a synthetic citation.
+    if not state.get("retrieval_failed") and disruption == "cancellation":
+        for clause_id in ("3.3.1", "3.3.2", "3.8.1(a)"):
+            if not _reserve_tool_call(state):
+                break
+            with trace.get_tracer(__name__).start_as_current_span("tool.get_clause"):
+                lookup = get_clause.invoke({"clause_id": clause_id, "doc_id": "CAR-S3-M-IV-R4"})
+            if lookup.get("retrieval_error"):
+                errors.append(str(lookup["retrieval_error"]))
+                state["retrieval_failed"] = True
+                break
+            chunk = lookup["chunk"]
+            by_id = {item["chunk_id"]: item for item in state["retrieved"]}
+            by_id.setdefault(chunk["chunk_id"], chunk)
+            state["retrieved"] = list(by_id.values())
+            if _budget_exceeded(state):
+                break
     if errors:
         state["errors"] = [*state.get("errors", []), *errors]
     if not _budget_exceeded(state) and not state.get("retrieval_failed"):

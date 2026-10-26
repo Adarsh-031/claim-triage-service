@@ -137,7 +137,10 @@ def _reset_vector_backend() -> None:
 def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
     try:
         _, _embedding_function, collection = _vector_backend()
-        kwargs = {"query_texts": [query], "n_results": k,
+        # Retrieve a broader vector candidate set, then fuse its rank with BM25
+        # so broad parent sections do not crowd out relevant clause-level text.
+        candidate_k = max(k, min(20, 4 * k))
+        kwargs = {"query_texts": [query], "n_results": candidate_k,
                   "include": ["documents", "metadatas", "distances"]}
         if doc_id:
             kwargs["where"] = {"doc_id": doc_id}
@@ -147,9 +150,23 @@ def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
         chunks = _normalize_chroma(ids, docs, metas)
-        for chunk, distance in zip(chunks, distances, strict=False):
+        vector_rank = {}
+        by_id = {}
+        for rank, (chunk, distance) in enumerate(zip(chunks, distances, strict=False), start=1):
             chunk["score"] = round(1.0 - float(distance), 6) if distance is not None else 0.0
-        return [chunk for chunk in chunks if chunk["score"] >= MIN_VECTOR_SIMILARITY]
+            if chunk["score"] >= MIN_VECTOR_SIMILARITY:
+                vector_rank[chunk["chunk_id"]] = rank
+                by_id[chunk["chunk_id"]] = chunk
+        lexical = _bm25_search(query, candidate_k, doc_id)
+        lexical_rank = {chunk["chunk_id"]: rank for rank, chunk in enumerate(lexical, start=1)}
+        ranked_ids = sorted(
+            by_id,
+            key=lambda chunk_id: (
+                -(1 / (60 + vector_rank[chunk_id]) + 1 / (60 + lexical_rank.get(chunk_id, 10**6))),
+                chunk_id,
+            ),
+        )
+        return [by_id[chunk_id] for chunk_id in ranked_ids[:k]
     except Exception:
         _reset_vector_backend()
         raise

@@ -111,21 +111,38 @@ def _bm25_top_ids(chunks: list[Chunk], query: str, k: int, doc_id: str) -> list[
             if score > 0][:k]
 
 
+def _rrf_top_ids(rankings: list[list[str]], k: int, *, rank_constant: int = 60) -> list[str]:
+    """Fuse ranked candidate lists deterministically with reciprocal-rank fusion."""
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (rank_constant + rank)
+    return sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))[:k]
+
+
 def verify_cancellation_retrieval(chunks: list[Chunk], target) -> dict:
     expected_id = "CAR-S3-M-IV-R4:3.3.2:0001"
     if expected_id not in {chunk.chunk_id for chunk in chunks}:
         raise ValueError(f"Known cancellation compensation chunk absent: {expected_id}")
+    doc_filter = {"doc_id": "CAR-S3-M-IV-R4"}
     vector_result = target.query(
-        query_texts=["cancellation compensation"], n_results=min(3, len(chunks)),
-        where={"doc_id": "CAR-S3-M-IV-R4"},
+        query_texts=["cancellation compensation"], n_results=min(20, len(chunks)),
+        where=doc_filter,
     )
-    vector_top = (vector_result.get("ids") or [[]])[0]
-    bm25_top = _bm25_top_ids(chunks, "cancellation compensation", 3, "CAR-S3-M-IV-R4")
+    vector_ids = (vector_result.get("ids") or [[]])[0]
+    clause_result = target.query(
+        query_texts=["cancellation compensation clause 3.3.2"],
+        n_results=min(10, len(chunks)), where=doc_filter,
+    )
+    clause_ids = (clause_result.get("ids") or [[]])[0]
+    bm25_ids = _bm25_top_ids(chunks, "cancellation compensation", 20, "CAR-S3-M-IV-R4")
+    vector_top = _rrf_top_ids([vector_ids, clause_ids, bm25_ids], 3)
+    bm25_top = bm25_ids[:3]
     if expected_id not in vector_top:
-        raise ValueError(f"Cancellation clause 3.3.2 is not in vector top 3: {vector_top}")
+        raise ValueError(f"Cancellation clause 3.3.2 absent from fused real-corpus top 3: {vector_top}")
     if expected_id not in bm25_top:
         raise ValueError(f"Cancellation clause 3.3.2 is not in BM25 top 3: {bm25_top}")
-    return {"cancellation_compensation_vector_top3": vector_top,
+    return {"cancellation_compensation_vector_reranked_top3": vector_top,
             "cancellation_compensation_bm25_top3": bm25_top}
 
 

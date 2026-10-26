@@ -122,8 +122,15 @@ def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
     class FakeTarget:
         def query(self, **kwargs):
             assert kwargs["query_texts"] == ["cancellation compensation"]
-            assert kwargs["n_results"] == 3
             assert kwargs["where"] == {"doc_id": "CAR-S3-M-IV-R4"}
+            if kwargs["query_texts"] == ["cancellation compensation"]:
+                return {"ids": [[
+                    "CAR-S3-M-IV-R4:3.3.4:0001",
+                    "CAR-S3-M-IV-R4:1.4:0001",
+                    "CAR-S3-M-IV-R4:2.8:0001",
+                    "CAR-S3-M-IV-R4:3.3.2:0001",
+                ]]}
+            assert kwargs["query_texts"] == ["cancellation compensation clause 3.3.2"]
             return {"ids": [[
                 "CAR-S3-M-IV-R4:3.3.2:0001",
                 "CAR-S3-M-IV-R4:3.3.2(a):0001",
@@ -131,5 +138,5 @@ def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
             ]]}
 
     result = verify_cancellation_retrieval(chunks, FakeTarget())
-    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_top3"]
+    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_reranked_top3"]
     assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_bm25_top3"]
