@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,9 +34,9 @@ class Settings(BaseSettings):
     chroma_collection: str = "triage-clauses-v1"
     worker_metrics_port: int = 8002
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
-    rate_limit_per_min: int = 10
+    rate_limit_per_min: int = Field(default=10, ge=1)
     cache_enabled: bool = True
-    cache_ttl_s: int = 3600
+    cache_ttl_s: int = Field(default=3600, ge=1)
     prompt_version: str = "v1"
 
     queue_name: str = "triage:runs"

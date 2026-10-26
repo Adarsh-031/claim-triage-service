@@ -160,6 +160,36 @@ def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
     assert stored[1].trace[0]["hit"] is True
 
 
+def test_worker_does_not_cache_provider_failures(monkeypatch):
+    from triage_common.contracts import EscalationReason, Route
+    from worker import main as worker
+
+    fake_redis = FakeRedis()
+    stored = SimpleNamespace(claim=demo_claim())
+    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(worker, "cache_redis", fake_redis)
+    monkeypatch.setattr(worker, "get_run", lambda _run_id: stored)
+    monkeypatch.setattr(worker, "update_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                route=Route.ESCALATE,
+                summary="Provider unavailable",
+                amount=None,
+                citations=[],
+                escalation_reason=EscalationReason.PROVIDER_DEGRADED,
+            ),
+            [{"step": "error"}],
+        ),
+    )
+
+    worker.handle({"run_id": str(uuid.uuid4()), "client_id": "127.0.0.1"})
+
+    assert not any(key.startswith("triage:cache:run:") for key in fake_redis.values)
+
+
 def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     stored = []
     session = FakeSession(stored)

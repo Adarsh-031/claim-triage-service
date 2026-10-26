@@ -13,11 +13,13 @@ digests and do not expose claim text or client identifiers.
   scoped to the requesting client so one client cannot receive another client's
   cached response. Successful results are cached after the worker persists them.
 
-After a successful corpus index sync, the processed `chunks.jsonl` content is hashed
-and its version is published in Redis. A change to chunk text, metadata, or chunker
-output therefore invalidates cached runs. Increment `RUN_CACHE_VERSION` whenever
-graph behavior changes so deployed fixes cannot reuse old answers. Cache read/write
-failures are treated as misses; Redis is required for request limiting and the queue.
+After a successful corpus index sync, `chunks.jsonl`, `refs.json`, and
+`definitions.json` are fingerprinted with the same version function used by the
+worker, and that version is published in Redis. A change to any processed artifact
+invalidates cached runs. Increment `RUN_CACHE_VERSION` whenever graph behavior
+changes so deployed fixes cannot reuse old answers. Invalid or unreadable cache
+entries are deleted and treated as misses; Redis is required for request limiting
+and the queue.
 
 The API uses a Redis token bucket with capacity `RATE_LIMIT_PER_MIN` (10 by default)
 and refills that many tokens per minute per source IP; caller-provided `X-Client-ID`
@@ -25,7 +27,8 @@ is ignored. A rejected request returns 429 with `Retry-After` in seconds. If Red
 cannot evaluate the limiter, the API returns 503 and increments
 `rate_limit_redis_errors_total`. `api_cache_hits_total` and
 `worker_cache_hits_total` expose cache hits, and `submit_latency_seconds` records API
-submission latency for p95 comparison.
+submission latency for p95 comparison. CI starts a pinned Redis service and tests
+the Lua token bucket against it, including concurrent requests, refill, and expiry.
 
 ## Measuring cache impact
 

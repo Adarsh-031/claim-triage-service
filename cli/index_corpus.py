@@ -11,6 +11,7 @@ import redis
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from triage_common.cache import CORPUS_VERSION_KEY
 from triage_common.contracts import Chunk
+from triage_common.corpus_version import corpus_version_from_directory
 from triage_common.settings import settings
 
 INDEX_VERSION = "contextual-minilm-v1"
@@ -126,6 +127,13 @@ def verify(chunks: list[Chunk], target) -> dict:
     return {"count": len(expected), "retrieved": matches["ids"][0]}
 
 
+def publish_corpus_version(client, processed_dir: Path) -> str:
+    """Publish the exact version fingerprint used by the worker's corpus loader."""
+    version = corpus_version_from_directory(processed_dir)
+    client.set(CORPUS_VERSION_KEY, version)
+    return version
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chunks", type=Path, default=Path("corpus/processed/chunks.jsonl"))
@@ -145,8 +153,9 @@ def main() -> None:
                 collection(client, settings.chroma_collection),
                 force=args.force or not settings.cache_enabled,
             )
-            version = hashlib.sha256(args.chunks.read_bytes()).hexdigest()
-            redis.Redis.from_url(settings.redis_url, decode_responses=True).set(CORPUS_VERSION_KEY, version)
+            version = publish_corpus_version(
+                redis.Redis.from_url(settings.redis_url, decode_responses=True), args.chunks.parent
+            )
             result["corpus_version"] = version
         print(json.dumps({"collection": settings.chroma_collection, **result}, sort_keys=True))
     except Exception as exc:

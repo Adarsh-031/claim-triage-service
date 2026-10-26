@@ -4,8 +4,18 @@ import chromadb
 import pytest
 from chromadb.api.types import EmbeddingFunction
 from triage_common.contracts import Chunk
+from worker.tools.corpus import Corpus
 
-from cli.index_corpus import INDEX_VERSION, MODEL, load_chunks, record, sync, validate_collection, verify
+from cli.index_corpus import (
+    INDEX_VERSION,
+    MODEL,
+    load_chunks,
+    publish_corpus_version,
+    record,
+    sync,
+    validate_collection,
+    verify,
+)
 
 
 class OfflineEmbedding(EmbeddingFunction):
@@ -126,3 +136,22 @@ def test_load_rejects_empty_duplicate_and_tampered_chunks(tmp_path):
     path.write_text(first.model_dump_json())
     with pytest.raises(ValueError, match="hash mismatch"):
         load_chunks(path)
+
+
+def test_published_corpus_version_matches_worker_and_covers_all_artifacts(tmp_path):
+    first = chunk()
+    (tmp_path / "chunks.jsonl").write_text(first.model_dump_json() + "\n", encoding="utf-8")
+    (tmp_path / "refs.json").write_text('{"refs":{}}', encoding="utf-8")
+    (tmp_path / "definitions.json").write_text('{"terms":{}}', encoding="utf-8")
+    published = {}
+
+    class FakeRedis:
+        def set(self, key, value):
+            published[key] = value
+
+    version = publish_corpus_version(FakeRedis(), tmp_path)
+
+    assert version == Corpus(tmp_path).version
+    assert published["triage:corpus:version"] == version
+    (tmp_path / "definitions.json").write_text('{"terms":{"new":"definition"}}', encoding="utf-8")
+    assert publish_corpus_version(FakeRedis(), tmp_path) != version

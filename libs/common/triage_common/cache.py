@@ -4,9 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from contextlib import suppress
 from typing import Any
 
 import redis
+from pydantic import ValidationError
+
+from .contracts import Recommendation
 
 DEMO_CORPUS_VERSION = "demo-fixture-v1"
 CORPUS_VERSION_KEY = "triage:corpus:version"
@@ -68,15 +72,34 @@ def current_corpus_version(client) -> str:
         return DEMO_CORPUS_VERSION
 
 
-def cache_get(client, key: str) -> dict | list | None:
+def cache_get(client, key: str) -> dict[str, Any] | None:
     try:
         value = client.get(key)
     except redis.RedisError:
         return None
-    return json.loads(value) if value is not None else None
+    if value is None:
+        return None
+    try:
+        cached = json.loads(value)
+    except (TypeError, ValueError):
+        cached = None
+    if isinstance(cached, dict):
+        status = cached.get("status")
+        result = cached.get("result")
+        if isinstance(status, str) and status in {"completed", "escalated"} and isinstance(result, dict):
+            try:
+                recommendation = Recommendation.model_validate(result)
+                if (status == "escalated") == (recommendation.route.value == "escalate"):
+                    return cached
+            except ValidationError:
+                pass
+    # A stale deployment or partial write must not make claim submission fail.
+    with suppress(AttributeError, redis.RedisError):
+        client.delete(key)
+    return None
 
 
-def cache_set(client, key: str, value: dict | list, ttl_seconds: int) -> None:
+def cache_set(client, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
     try:
         client.set(key, json.dumps(value, separators=(",", ":")), ex=ttl_seconds)
     except redis.RedisError:
