@@ -72,6 +72,7 @@ class CircuitBreaker:
                     probe_acquired = True
         except redis.RedisError:
             log.warning("Redis unavailable before %s call; treating breaker as closed", self.name)
+            LLM_BREAKER_STATE.labels(self.name).set(0)
             return
         LLM_BREAKER_STATE.labels(self.name).set({"closed": 0, "open": 1, "half_open": 2}[state])
         if state == "open":
@@ -184,7 +185,8 @@ def get_llm() -> LLM:
     if settings.llm_provider == "stub":
         # The default is a local HTTP service, so callers exercise the same
         # OpenAI-compatible request/response path as a real provider.
-        return OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model_primary or "stub")
+        primary = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model_primary or "stub")
+        return ResilientLLM(primary, None, provider_name=settings.llm_provider)
 
     if settings.llm_provider != "openrouter":
         raise ValueError("LLM_PROVIDER must be 'stub' or 'openrouter'")

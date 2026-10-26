@@ -5,7 +5,7 @@ import time
 import httpx
 import pytest
 import redis
-from worker.agent.llm import CircuitBreaker, CircuitOpen, ResilientLLM
+from worker.agent.llm import CircuitBreaker, CircuitOpen, ResilientLLM, get_llm
 
 
 class FakePipeline:
@@ -163,6 +163,35 @@ def test_redis_errors_do_not_interrupt_provider_fallback(monkeypatch):
     assert ResilientLLM(primary, fallback, breaker).chat([])["content"] == "fallback"
     assert primary.calls == 2
     assert fallback.calls == 1
+
+
+def test_redis_errors_during_half_open_probe_and_release_are_isolated():
+    class UnavailableProbeRedis(FakeRedis):
+        def get(self, key):
+            if key.endswith(":opened"):
+                return str(time.time() - 31)
+            return super().get(key)
+
+        def set(self, *_args, **_kwargs):
+            raise redis.RedisError("redis unavailable")
+
+        def eval(self, *_args):
+            raise redis.RedisError("redis unavailable")
+
+    breaker = CircuitBreaker(1, 30, 30, client=UnavailableProbeRedis())
+    breaker.probe_token = "expired-probe-token"
+
+    breaker.before()
+    breaker.success()
+
+
+def test_stub_provider_uses_resilience_and_provider_label(monkeypatch):
+    monkeypatch.setattr("worker.agent.llm.settings.llm_provider", "stub")
+
+    resilient = get_llm()
+
+    assert isinstance(resilient, ResilientLLM)
+    assert resilient.breaker.name == "stub"
 
 
 def test_resilient_llm_breaker_uses_configured_provider_name(monkeypatch):
