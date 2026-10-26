@@ -4,10 +4,35 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from triage_common.contracts import Citation, ClaimIn, EscalationReason, Route
+from triage_common.contracts import Citation, EscalationReason, Route
 
 from ..tools import corpus
 from ..tools.compensation import compute_compensation
+
+# Provider-visible eligibility facts only. New contract fields are private by default;
+# fare inputs stay in the server-side calculator, and booking identifiers stay local.
+RESEARCH_FIELDS = frozenset({
+    "airline_code", "disruption_type", "block_time_minutes", "notice_minutes_before_departure",
+    "delay_minutes", "reported_at_airport", "contact_info_provided", "stated_cause",
+})
+RESEARCH_ALTERNATE_FIELDS = frozenset({"offered", "accepted", "departure_delay_minutes"})
+RESEARCH_FIELD_PATHS = RESEARCH_FIELDS | {"alternate"} | {
+    f"alternate.{name}" for name in RESEARCH_ALTERNATE_FIELDS
+}
+COMPARISON_CLAUSES = {
+    corpus.CAR_DOC: ("1.4", "1.5"),
+    "INDIGO-COC-DOM": ("1.1", "14.2"),
+    "INDIGO-COC-INTL": ("1.1", "14.2"),
+}
+
+
+def research_facts(claim: dict) -> dict:
+    facts = {key: value for key, value in claim.items() if key in RESEARCH_FIELDS}
+    if "alternate" in claim:
+        alternate = claim["alternate"]
+        facts["alternate"] = ({key: value for key, value in alternate.items()
+                               if key in RESEARCH_ALTERNATE_FIELDS} if isinstance(alternate, dict) else None)
+    return facts
 
 # A checklist is data, not an assertion the model can waive in its prompt.
 # Each entry specifies required CAR clauses and structured claim facts.
@@ -60,7 +85,7 @@ class DefinitionArgs(Args):
 
 
 class ClaimFieldArgs(Args):
-    name: str = Field(min_length=1, max_length=150)
+    name: str = Field(min_length=1, max_length=150, json_schema_extra={"enum": sorted(RESEARCH_FIELD_PATHS)})
 
 
 class CompensationArgs(Args):
@@ -81,8 +106,20 @@ def validate_report(report: dict, state: dict) -> dict:
         car = chunks.get(comparison.car_chunk_id)
         airline = chunks.get(comparison.indigo_chunk_id)
         if (not car or not airline or car["doc_id"] != corpus.CAR_DOC
-                or airline["doc_id"] not in {"INDIGO-COC-DOM", "INDIGO-COC-INTL"}):
-            raise ValueError("A source comparison needs retrieved CAR and IndiGo chunk IDs")
+                or car["clause_id"] not in COMPARISON_CLAUSES[corpus.CAR_DOC]
+                or airline["doc_id"] not in COMPARISON_CLAUSES or airline["doc_id"] == corpus.CAR_DOC
+                or airline["clause_id"] not in COMPARISON_CLAUSES[airline["doc_id"]]):
+            raise ValueError("A source comparison needs retrieved CAR 1.4/1.5 and IndiGo 1.1/14.2 chunk IDs")
+        retrieved = {corpus.qualified(c["clause_id"], c["doc_id"]) for c in chunks.values()}
+        required = {corpus.qualified(clause, doc) for doc, clauses in COMPARISON_CLAUSES.items()
+                    for clause in clauses}
+        if not required <= retrieved:
+            raise ValueError("A source comparison needs all required CAR and both IndiGo snapshot clauses")
+        # Relevant citations establish coverage, not the truth of a relationship.
+        # Neither compatibility nor conflict is trusted without an independent verifier.
+        comparison = Comparison(status="missing", car_chunk_id=comparison.car_chunk_id,
+                                indigo_chunk_id=comparison.indigo_chunk_id,
+                                reason="Source relationship is unverified. Human review required.")
     return {"comparison": comparison.model_dump()}
 
 
@@ -92,7 +129,7 @@ REGISTRY = {
     "get_references": (ClauseArgs, corpus.get_references, "Outgoing qualified edges from refs.json."),
     "get_referrers": (ClauseArgs, corpus.get_referrers, "Incoming qualified edges; discover modifying clauses."),
     "get_definition": (DefinitionArgs, corpus.get_definition, "Citable definitions from definitions.json."),
-    "get_claim_field": (ClaimFieldArgs, None, "Read a structured claim field, including nested alternate fields."),
+    "get_claim_field": (ClaimFieldArgs, None, "Read allowlisted eligibility facts, including nested alternate fields."),
     "compute_compensation": (CompensationArgs, None,
                              "Compute from the run's trusted claim facts; never supply or invent monetary inputs."),
 }
@@ -110,9 +147,9 @@ def field_value(claim: dict, name: str):
 
 
 def get_claim_field(claim: dict, name: str):
-    if name.split(".")[0] not in ClaimIn.model_fields or name == "statement":
+    if name not in RESEARCH_FIELD_PATHS:
         raise ValueError("Unknown structured claim field")
-    return field_value(claim, name)
+    return field_value(research_facts(claim), name)
 
 
 def execute_tool(name: str, arguments: dict, claim: dict):
@@ -150,8 +187,8 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
     for item, (clauses, fields) in entries.items():
         required = [corpus.qualified(c) for c in clauses]
         if item == "airline_comparison":
-            required += [f"{doc}:{clause}" for doc in ("INDIGO-COC-DOM", "INDIGO-COC-INTL")
-                         for clause in ("1.1", "14.2")]
+            required = [corpus.qualified(clause, doc) for doc, clauses in COMPARISON_CLAUSES.items()
+                        for clause in clauses]
         missing_chunks = [key for key in required if key not in retrieved]
         missing_fields = [key for key in fields if field_value(claim, key) is None]
         missing = bool(missing_chunks or missing_fields)
@@ -160,10 +197,9 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
             "chunk_ids": [retrieved[key]["chunk_id"] for key in required if key in retrieved],
             "missing_chunks": missing_chunks, "missing_fields": missing_fields,
         }
-        if (item == "airline_comparison" and complete
-                and (state.get("research_report") or {}).get("comparison", {}).get("status") == "missing"):
+        if item == "airline_comparison" and complete:
             results[item]["status"] = "missing"
-            results[item]["reason"] = "No supported comparison was produced"
+            results[item]["reason"] = "Source relationship is unverified. Human review required."
     return results
 
 
@@ -181,21 +217,17 @@ def provision_conflict(state: dict) -> list[str]:
     """
     if state["claim"].get("airline_code") != "6E":
         return []
+    # Model-authored comparisons never establish a conflict. This narrow,
+    # deterministic condition only requests review of potentially broader wording.
     chunks = {c["chunk_id"]: c for c in state.get("retrieved", [])}
-    comparison = (state.get("research_report") or {}).get("comparison", {})
-    if isinstance(comparison, dict) and comparison.get("status") == "conflict":
-        ids = [comparison.get("car_chunk_id"), comparison.get("indigo_chunk_id")]
-        evidence = [chunks.get(key) for key in ids]
-        if (all(evidence) and evidence[0]["doc_id"] == corpus.CAR_DOC
-                and evidence[1]["doc_id"] in {"INDIGO-COC-DOM", "INDIGO-COC-INTL"}):
-            return ids
     cause = str(state["claim"].get("stated_cause") or "").casefold()
     if not any(term in cause for term in ("technical", "mechanical")):
         return []
     car = next((c for c in chunks.values() if c["doc_id"] == corpus.CAR_DOC and c["clause_id"] == "1.4"
                 and "reasonable measures" in c["text"] and "beyond the control" in c["text"]), None)
-    airline = next((c for c in chunks.values() if c["doc_id"].startswith("INDIGO-COC-")
-                    and c["clause_id"] == "1.1" and "technical" in c["text"].casefold()), None)
+    airline = next((c for c in chunks.values() if c["doc_id"] in {"INDIGO-COC-DOM", "INDIGO-COC-INTL"}
+                    and c["clause_id"] == "1.1"
+                    and "mechanical, technical, or operational issues or failures" in c["text"].casefold()), None)
     return [car["chunk_id"], airline["chunk_id"]] if car and airline else []
 
 

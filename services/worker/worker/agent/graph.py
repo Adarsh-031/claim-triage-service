@@ -17,7 +17,7 @@ from triage_common.settings import settings
 from ..metrics import NODE_LATENCY
 from ..tools.corpus import get_corpus
 from .llm import CircuitOpen, get_llm
-from .research import TOOLS, checklist, collect_chunks, execute_tool, make_draft, validate_report
+from .research import TOOLS, checklist, collect_chunks, execute_tool, make_draft, research_facts, validate_report
 
 PROMPT_VERSION = "research-v1"
 PROMPT_PATH = Path(__file__).resolve().parents[4] / "prompts" / "research_v1.md"
@@ -58,8 +58,8 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
 
 
 def intake(state: RunState) -> RunState:
-    # The narrative is withheld until intake guardrails are implemented.
-    state["facts"] = {k: v for k, v in state["claim"].items() if k != "statement"}
+    # Share only eligibility facts; booking identifiers and the narrative stay local.
+    state["facts"] = research_facts(state["claim"])
     state["retrieved"] = []
     state["checklist"] = checklist(state)
     try:

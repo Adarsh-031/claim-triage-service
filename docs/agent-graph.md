@@ -7,8 +7,12 @@ Conditional edges continue research, draft when the provider finishes, or finali
 escalation on an exhausted budget or unavailable corpus/provider. The draft node also
 routes provision conflicts directly to finalization.
 
-Intake supplies structured claim fields and a data checklist. The passenger narrative
-is withheld until the separate intake guardrails are implemented. The model chooses
+Intake supplies an explicit allowlist of eligibility facts and a data checklist:
+airline code, disruption type, block time, notice and delay durations, airport reporting,
+contact-info availability, stated cause, and alternate offered/accepted/departure delay.
+The claim-field tool enforces the same allowlist, including filtering the entire alternate
+object. Booking PNR, flight number/date, origin/destination, total fare, narrative, and
+new unlisted fields stay local. The model chooses
 retrieval tools; it cannot replace structured facts, waive checklist coverage, supply
 calculator inputs, or set the output amount. The versioned instructions are in
 `prompts/research_v1.md` (`prompt_version=research-v1`).
@@ -51,18 +55,23 @@ exercise that same HTTP response path in-process, with ingestion artifacts gener
 from the pinned CAR text fixture and both CoC snapshots. They need no external model,
 network service, PDF binary, or pre-existing `corpus/processed` directory.
 
-For s01, the **research draft** declines cancellation compensation because the alternate
-was accepted (`3.3.1`, `3.3.2`), and retains meals/refreshments during the airport wait
-(`3.3.2`, `3.8.1(a)`). Zero comes from `compute_compensation`. The missing stated cause is
-recorded explicitly; it is not necessary to infer a cause to exclude compensation for
-an accepted alternate. The scripted run uses 8 work steps and 14 tool calls.
+For s01, `compute_compensation` returns zero because the alternate was accepted.
+The research draft requests further evidence/review because the CAR/CoC relationship
+has not been independently validated; it does not assert a decline or meals entitlement.
+The missing stated cause is recorded explicitly. The scripted run uses 8 work steps
+and 14 tool calls.
 
 For a technical-fault cancellation, CoC `1.1` explicitly lists technical failures while
 CAR `1.4` requires beyond-control and reasonable-measures evidence. The worker refers
 this potential lower-protection interpretation as `PROVISION_CONFLICT`, with both source
 citations. It does not conclude that every technical fault qualifies for compensation.
-Other provider-reported conflicts also need retrieved CAR and CoC chunk IDs. The s21
-expected route now reflects the explicit escalation requirement in issue #26.
+Provider comparisons must cite CAR `1.4`/`1.5` and IndiGo `1.1`/`14.2`, with all six
+comparison clauses retrieved across CAR and both CoC snapshots. Unrelated retrieved
+chunks are rejected. Even relevant citations only establish coverage: model-authored
+`compatible` and `conflict` reports become `missing` pending independent relationship
+validation, and the comparison checklist remains missing. Such reports cannot trigger
+`PROVISION_CONFLICT`; only the deterministic technical-fault review condition above can.
+The s21 expected route reflects the explicit escalation requirement in issue #26.
 
 The separate grounding verifier is still pending. `verify` leaves `verified=False`,
 and finalization converts every consequential draft into `VERIFICATION_FAILED` with

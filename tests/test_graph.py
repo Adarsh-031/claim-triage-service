@@ -21,7 +21,7 @@ def tool_call(name, **arguments):
     return {"id": "test-tool", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-def test_s01_research_declines_compensation_and_preserves_meals_with_real_citations():
+def test_s01_research_preserves_real_citations_and_requires_comparison_review():
     run_id = str(uuid4())
     result, trace = graph.run_agent(SCENARIO["claim"], "test-cid", run_id=run_id)
     assert Result.model_validate_json(result.model_dump_json()) == result
@@ -30,10 +30,12 @@ def test_s01_research_declines_compensation_and_preserves_meals_with_real_citati
     assert result.route is Route.ESCALATE
     assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
     draft = next(t for t in trace if t["step"] == "draft")
-    assert draft["route"] == Route.DECLINE
-    assert draft["amount"] == draft["compensation"]["amount"] == 0
-    assert "compensation declined" in draft["summary"]
-    assert "Meals and refreshments are owed" in draft["summary"]
+    assert draft["route"] == Route.REQUEST_EVIDENCE
+    assert draft["amount"] is None and draft["compensation"]["amount"] == 0
+    assert draft["checklist"]["airline_comparison"]["status"] == "missing"
+    assert "unverified" in draft["checklist"]["airline_comparison"]["reason"]
+    assert "compensation declined" not in draft["summary"]
+    assert "Meals and refreshments are owed" not in draft["summary"]
     assert set(SCENARIO["expected"]["must_cite"]) <= {c.clause_id for c in result.citations}
     chunks = corpus.get_corpus().chunks
     for citation in result.citations:
@@ -301,3 +303,50 @@ def test_fabricated_comparison_citations_cannot_finish_research(monkeypatch):
     result, trace = graph.run_agent(SCENARIO["claim"])
     assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
     assert not any(t["step"] == "draft" for t in trace)
+
+
+@pytest.mark.parametrize("status", ["compatible", "conflict"])
+def test_irrelevant_retrieved_citations_cannot_create_conflict_or_complete_research(monkeypatch, research_env, status):
+    original_tool, original_chat = graph.execute_tool, research_env.chat
+    car, airline = corpus.get_clause("3.3.2"), corpus.get_clause("10.2", "INDIGO-COC-DOM")
+
+    def retrieve(name, arguments, claim):
+        output = original_tool(name, arguments, claim)
+        return [*output, car, airline] if name == "get_definition" else output
+
+    def report(messages, *args, **kwargs):
+        reply = original_chat(messages, *args, **kwargs)
+        if not reply.get("tool_calls"):
+            reply["content"] = json.dumps({"comparison": {
+                "status": status, "car_chunk_id": car["chunk_id"], "indigo_chunk_id": airline["chunk_id"],
+            }})
+        return reply
+
+    monkeypatch.setattr(graph, "execute_tool", retrieve)
+    monkeypatch.setattr(research_env, "chat", report)
+    result, trace = graph.run_agent({**SCENARIO["claim"], "stated_cause": "weather"})
+    retrieved = {chunk_id for step in trace if step["step"] == "tool" for chunk_id in step["chunk_ids"]}
+    assert {car["chunk_id"], airline["chunk_id"]} <= retrieved
+    assert result.escalation_reason is EscalationReason.BUDGET_EXCEEDED
+    assert result.route is Route.ESCALATE and result.amount is None
+    assert not any(t["step"] == "draft" for t in trace)
+
+
+def test_relevant_citations_with_model_conflict_still_require_independent_review(monkeypatch, research_env):
+    original = research_env.chat
+
+    def report(messages, *args, **kwargs):
+        reply = original(messages, *args, **kwargs)
+        if not reply.get("tool_calls"):
+            content = json.loads(reply["content"])
+            content["comparison"]["status"] = "conflict"
+            reply["content"] = json.dumps(content)
+        return reply
+
+    monkeypatch.setattr(research_env, "chat", report)
+    result, trace = graph.run_agent({**SCENARIO["claim"], "stated_cause": "weather"})
+    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
+    assert result.amount is None
+    draft = next(t for t in trace if t["step"] == "draft")
+    assert draft["checklist"]["airline_comparison"]["status"] == "missing"
+    assert draft["route"] is Route.REQUEST_EVIDENCE
