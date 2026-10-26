@@ -21,6 +21,10 @@ services:
   worker:
     build: { context: ., dockerfile: services/worker/Dockerfile }
     <<: *app-env
+    volumes:
+      - ./corpus:/src/corpus:ro
+    environment:
+      CORPUS_DIR: ${CORPUS_DIR:-/src/corpus/processed}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

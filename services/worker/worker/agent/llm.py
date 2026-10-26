@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from functools import lru_cache
 from typing import Protocol
 from uuid import uuid4
 
@@ -17,7 +18,8 @@ log = logging.getLogger(__name__)
 
 
 class LLM(Protocol):
-    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict: ...
+    def chat(self, messages: list[dict], tools: list[dict] | None = None,
+             *, timeout_s: float | None = None) -> dict: ...
 
 
 class CircuitOpen(RuntimeError):
@@ -139,11 +141,13 @@ class OpenAICompatibleLLM:
             headers=headers,
         )
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, *, timeout_s=None):
         body = {"model": self.model, "messages": messages}
         if tools:
             body["tools"] = tools
-        resp = self.client.post("/chat/completions", json=body)
+        resp = self.client.post("/chat/completions", json=body,
+                                timeout=min(settings.llm_timeout_s, timeout_s)
+                                if timeout_s is not None else settings.llm_timeout_s)
         resp.raise_for_status()
         data = resp.json()
         # Preserve the same message shape regardless of whether the endpoint is
@@ -164,12 +168,22 @@ class ResilientLLM:
             name=provider_name or settings.llm_provider,
         )
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, *, timeout_s=None):
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+
+        def remaining():
+            if deadline is None:
+                return None
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise httpx.TimeoutException("Research run deadline exhausted")
+            return left
+
         try:
             self.breaker.before()
             for attempt in range(settings.retry_max):
                 try:
-                    out = self.primary.chat(messages, tools)
+                    out = self.primary.chat(messages, tools, timeout_s=remaining())
                     self.breaker.success()
                     return out
                 except (httpx.HTTPError, KeyError):
@@ -177,14 +191,17 @@ class ResilientLLM:
                     if self.breaker.state != "closed":
                         break
                     if attempt + 1 < settings.retry_max:
-                        time.sleep(min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3))
+                        delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
+                        left = remaining()
+                        time.sleep(min(delay, left) if left is not None else delay)
             raise CircuitOpen("primary exhausted retries")
         except CircuitOpen:
             if self.fallback is None:
                 raise
-            return self.fallback.chat(messages, tools)
+            return self.fallback.chat(messages, tools, timeout_s=remaining())
 
 
+@lru_cache(maxsize=1)
 def get_llm() -> LLM:
     if settings.llm_provider == "stub":
         # The default is a local HTTP service, so callers exercise the same
