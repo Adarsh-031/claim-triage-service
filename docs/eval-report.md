@@ -21,7 +21,9 @@ The `evaluation-smoke` GitHub Actions artifact runs all 28 scenarios through rea
 PostgreSQL, Redis, API and worker processes with a deterministic HTTP provider stub.
 It checks workflow execution and reports real route mismatches; it does not measure
 model quality. See [evaluation instructions](../eval/README.md) for configuration,
-known amount-field limitations, and the command that produces the measured report.
+calculator gold cases, and the command that produces the measured report. Calculator
+amount accuracy is sourced from the private worker trace; the API intentionally
+withholds unverified amounts from its final recommendation.
 
 ## Measured CI smoke baseline (2026-10-26)
 
@@ -42,3 +44,4 @@ one prompt is better. TruLens scores and payable amount accuracy were not measur
 in this smoke run.
 
 Corpus chunks SHA-256: `5fdbd5876c07a2eea4b86d68491fcc9527313b5fa9f25774019fbed023fd6b9a`.
+

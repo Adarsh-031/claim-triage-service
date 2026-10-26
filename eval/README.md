@@ -49,18 +49,20 @@ provider stub, and uploads the reports and service logs as `evaluation-smoke`.
 - Raw artifacts preserve run IDs, terminal payloads, traces, prompt hashes, corpus
   hash, and provider model identity for scored cases. Worker failures and wrong
   executed prompt/corpus versions are errors, not correct escalations.
-- `expected.compensation_inr`, when present, is compared with the API result and
-  reported as amount accuracy separately from route accuracy.
+- `expected.compensation_inr`, when present, is compared with the deterministic
+  compensation result in the worker's internal trace and reported as calculator
+  amount accuracy separately from route accuracy. Final API amounts remain withheld
+  until independent grounding verification exists.
 
 ## Outstanding acceptance evidence
 
 A live model/judge comparison must still be run and reviewed before claiming a
 prompt-quality improvement. CI smoke reports validate the workflow only.
 
-The current `ClaimIn` schema has a total `ticket_fare_inr` but does not accept the
-calculator's basic fare, fuel charge, or downgrade ticket-cost inputs. Do not invent
-payable scenario amounts from that total or change the gold routes to force a pass.
-Populate reviewed `expected.compensation_inr` amounts when those eligibility/monetary
-inputs are supported by the API; until then amount accuracy is N/A for those cases.
+The API accepts explicit basic fare, fuel charge, and downgrade inputs. Do not invent
+payable scenario amounts from total ticket fare or change gold routes to force a pass.
+Only add reviewed `expected.compensation_inr` amounts to scenarios whose eligibility
+facts and separate monetary inputs support a deterministic calculator result.
 
 TruLens API reference: https://www.trulens.org/reference/trulens/providers/openai/provider/
+

@@ -118,6 +118,13 @@ def test_pay_with_amount_and_citation_is_valid():
     assert len(result.citations) >= 1
 
 
+def test_claim_accepts_explicit_calculator_fare_components():
+    scenario = json.loads((ROOT / "eval/scenarios/s05_cancel_late_notice_no_alternate.json").read_text())
+    claim = ClaimIn.model_validate(scenario["claim"])
+    assert claim.one_way_basic_fare_inr == 9000
+    assert claim.airline_fuel_charge_inr == 1000
+
+
 def test_escalate_requires_reason():
     payload = {**BASE_RESULT, "route": Route.ESCALATE.value, "amount": None, "escalation_reason": None}
     with pytest.raises(ValidationError, match="escalation_reason is required"):
@@ -208,3 +215,4 @@ def test_valid_cancellation_claim_remains_valid_with_notice():
     scenario = json.loads((ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())
     claim = ClaimIn.model_validate(scenario["claim"])
     assert claim.notice_minutes_before_departure == 90
+

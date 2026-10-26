@@ -118,6 +118,28 @@ def test_wrong_executed_version_is_not_a_comparison_success(tmp_path):
     assert "prompt version" in result["error"]
 
 
+def test_calculator_accuracy_uses_internal_trace_without_public_amount(tmp_path):
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps({"id": "case", "claim": {},
+                                "expected": {"route": "escalate", "compensation_inr": 5000}}))
+
+    def handle(request):
+        if request.method == "POST":
+            return httpx.Response(202, json={"run_id": "id"})
+        if request.url.path.endswith("/trace"):
+            return httpx.Response(200, json={"steps": [
+                {"step": "intake", "prompt_version": "v1"},
+                {"step": "draft", "compensation": {"status": "computed", "amount": 5000}},
+            ]})
+        return httpx.Response(200, json={"status": "done", "result": {"route": "escalate", "amount": None}})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result = run_scenario(client, "http://api", str(path), "v1", 0)
+    assert result["amount_correct"] is True
+    assert result["calculator_amount_inr"] == 5000
+    assert result["result"].get("amount") is None
+
+
 def test_trulens_adapter_uses_context_and_aggregates_scores():
     from cli.semantic_feedback import SemanticFeedback
 
@@ -161,3 +183,4 @@ def test_installed_trulens_provider_contract():
                                ("context_relevance_with_cot_reasons", {"question", "context"}),
                                ("relevance_with_cot_reasons", {"prompt", "response"})]:
         assert parameters <= set(inspect.signature(getattr(provider, method)).parameters)
+

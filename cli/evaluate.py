@@ -137,7 +137,14 @@ def run_scenario(client, api, path, prompt_version, poll_interval, chunks=None, 
                 "status": status, "result": result, "payload": payload, "trace": steps,
                 "executed_prompt_version": executed, "runtime_corpus_version": intake.get("corpus_version")}
         if "compensation_inr" in expected:
-            item["amount_correct"] = result.get("compensation_inr") == expected["compensation_inr"]
+            # Consequential amounts are intentionally withheld from the public result
+            # until independent grounding verification exists. Score the deterministic
+            # calculator from its private worker trace instead.
+            draft = next((s for s in reversed(steps) if s.get("step") == "draft"), {})
+            computation = draft.get("compensation") or {}
+            actual_amount = computation.get("amount") if computation.get("status") == "computed" else None
+            item["calculator_amount_inr"] = actual_amount
+            item["amount_correct"] = actual_amount == expected["compensation_inr"]
             item["expected_compensation_inr"] = expected["compensation_inr"]
         if feedback:
             ids = dict.fromkeys(cid for s in steps if s.get("step") == "tool" for cid in s.get("chunk_ids", []))
@@ -164,6 +171,7 @@ def summarize(results):
             "citation_resolution_rate": average([r["citation"]["citation_resolution_rate"] for r in results]),
             "required_clause_recall": average([r["citation"]["required_clause_recall"] for r in results]),
             "amount_accuracy": average([r.get("amount_correct") for r in results]),
+            "amount_cases": sum("expected_compensation_inr" in r for r in results),
             "errors": sum(r["status"] == "error" for r in results), "semantic_feedback": semantic}
 
 
@@ -180,13 +188,16 @@ def write_report(output_dir, results_by_version, *, report_path=None, corpus_dir
              "v1 and v2 select different research instructions. "
              "Deterministic decision and verification gates remain active.",
              "The HTTP stub verifies plumbing only; its output does not demonstrate model-quality improvement.", "",
-             "| Prompt | Scenarios | Route accuracy | Citation accuracy | Clause recall | Amount accuracy | Errors |",
+             "| Prompt | Scenarios | Route accuracy | Citation accuracy | Clause recall | "
+             "Calculator amount accuracy | Errors |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for v, m in summary.items():
         lines.append(f"| {v} | {m['scenario_count']} | {pct(m['route_accuracy'])} | "
                      f"{pct(m['citation_resolution_rate'])} | {pct(m['required_clause_recall'])} | "
-                     f"{pct(m['amount_accuracy'])} | {m['errors']} |")
-    lines += ["", "## TruLens feedback", "",
+                     f"{pct(m['amount_accuracy'])} ({m['amount_cases']} gold cases) | {m['errors']} |")
+    lines += ["", "Calculator amount accuracy is scored from the internal deterministic calculator trace; "
+              "the final API deliberately withholds unverified consequential amounts.", "",
+              "## TruLens feedback", "",
               "Hallucination rate is defined as 1 − groundedness (a judge-score proxy).",
               "N/A means unavailable or not evaluated; no substitute score is fabricated.", "",
               "| Prompt | Groundedness | Context relevance | Answer relevance | Hallucination rate | "
@@ -257,3 +268,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -2,6 +2,13 @@
 
 The shared contracts live in `libs/common/triage_common/contracts.py`. They define payloads shared by the API, agent graph and web client. JSON examples in `docs/examples/` are validated by `tests/test_contracts.py`.
 
+Claims may include `one_way_basic_fare_inr` and `airline_fuel_charge_inr` as separate
+calculator inputs, plus `sector`, `distance_km`, and
+`ticket_cost_including_taxes_inr` for downgrade calculations. These are optional
+evidence fields. Never derive them from `ticket_fare_inr`; a missing component leaves
+the internal calculation in `needs_evidence`. Unverified calculator values are not
+exposed as a final compensation recommendation.
+
 ## Chunk
 
 A normalized source passage, including a stable `chunk_id`, document and clause identifiers, heading context, page metadata, cross-references, and a SHA-256 hash of the chunk text. The `chunk_id` is the key used to link citations to retrieved passages and must be present.
@@ -87,3 +94,4 @@ See [the graph skeleton guide](agent-graph.md) for fixture provenance and budget
 - `EscalationReason`: `CAUSE_DISPUTED`, `PROVISION_CONFLICT`, `OUT_OF_CORPUS`, `VERIFICATION_FAILED`, `BUDGET_EXCEEDED`, `PROVIDER_DEGRADED`, `GUARDRAIL_BLOCKED`, and `WORKER_FAILURE`.
 
 Older route and escalation member names remain aliases for backwards compatibility. Pydantic models reject unknown fields where strict validation matters. Generate the schema for the web client with `Result.model_json_schema()`.
+
