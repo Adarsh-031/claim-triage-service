@@ -110,6 +110,27 @@ new collection name; incompatible collection metadata fails rather than mixing v
 The agent graph still uses issue #6's demo fixture search. This check verifies the
 real corpus index independently; it does not imply the graph uses authoritative retrieval.
 
+## Upgrade an existing PostgreSQL volume for worker recovery
+
+Fresh databases get the recovery columns from `deploy/postgres/init.sql`. Existing
+PostgreSQL volumes are not altered by SQLAlchemy `create_all()`; before deploying
+this worker version to an existing volume, apply the idempotent migration with the
+database deployment/owner account:
+
+```sql
+-- deploy/postgres/migrations/20261026_worker_reliability.sql
+ALTER TABLE runs
+    ADD COLUMN IF NOT EXISTS requeue_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS started_at timestamptz,
+    ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz,
+    ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+```
+
+Run it once against the target database using your normal controlled migration
+process. Do not put schema-altering statements back into API or worker startup.
+Verify the columns exist before rolling out the worker; otherwise mapped queries
+may fail on an older `runs` table.
+
 ## Redis queue backlog is growing
 
 **Symptom:** Claims remain `queued`, or the number of waiting jobs keeps increasing.
