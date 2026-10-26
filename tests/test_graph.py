@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from triage_common.cache import run_cache_key
+from triage_common.cache import DEMO_CORPUS_VERSION, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from worker import main as worker_main
 from worker.agent import graph
@@ -30,8 +30,7 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
         "verified": False,
         "requires_human_approval": True,
     }
-    corpus_version = corpus.get_corpus().version
-    key = run_cache_key(SCENARIO["claim"], "research-v1", corpus_version, "unknown")
+    key = run_cache_key(SCENARIO["claim"], "v1", DEMO_CORPUS_VERSION, "unknown")
 
     class FakeCache:
         values = {key: json.dumps({"status": "escalated", "result": cached_result})}
@@ -48,7 +47,7 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **fields: updates.append(fields))
     monkeypatch.setattr(worker_main, "run_agent", lambda *_args, **_kwargs: pytest.fail("cache hit must skip graph"))
 
-    worker_main.handle({"run_id": str(run_id), "client_id": "unknown", "prompt_version": "research-v1"})
+    worker_main.handle({"run_id": str(run_id), "client_id": "unknown", "prompt_version": "v1"})
 
     assert updates[-1]["status"] == "escalated"
     assert updates[-1]["result"] == cached_result
@@ -79,7 +78,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "research-v1"
+    assert result.prompt_version == "v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
