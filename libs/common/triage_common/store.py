@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -59,8 +59,17 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def init_db() -> None:
-    # Schema changes are applied through deploy/postgres/init.sql for fresh local volumes.
+    # create_all creates missing tables but does not add columns to an existing runs table.
     Base.metadata.create_all(engine)
+    # Keep existing persistent volumes compatible with the current Run model.
+    # IF NOT EXISTS makes this safe to execute on every service startup.
+    with engine.begin() as connection:
+        connection.execute(text(
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS requeue_count integer NOT NULL DEFAULT 0"
+        ))
+        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_at timestamptz"))
+        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz"))
+        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS finished_at timestamptz"))
 
 
 def list_quarantine(limit: int = 50) -> list[Quarantine]:

@@ -240,3 +240,36 @@ def test_consume_once_survives_redis_receive_errors(monkeypatch):
             raise redis.ConnectionError("temporary disconnect")
     monkeypatch.setattr(worker_main, "sleep", lambda _seconds: None)
     assert worker_main.consume_once(BrokenRedis()) is False
+
+
+def test_worker_does_not_acknowledge_when_finalization_loses_ownership(monkeypatch):
+    run_id = uuid4()
+    run = SimpleNamespace(status=RunStatus.queued.value, claim={"claim": "example"})
+    updates = []
+    result = SimpleNamespace(route=Route.PAY, summary="Eligible", amount=100.0, citations=[], escalation_reason=None)
+    _patch_worker_store(monkeypatch, run, updates)
+    monkeypatch.setattr(worker_main, "finish_run", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(worker_main, "run_agent", lambda *args, **kwargs: (result, [{"step": "finalize"}]))
+    assert worker_main._handle({"run_id": str(run_id)}) is False
+
+
+def test_worker_does_not_acknowledge_when_failure_result_loses_ownership(monkeypatch):
+    run_id = uuid4()
+    run = SimpleNamespace(status=RunStatus.queued.value, claim={"claim": "example"})
+    _patch_worker_store(monkeypatch, run, [])
+    monkeypatch.setattr(worker_main, "finish_run", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        worker_main,
+        "run_agent",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("provider failure")),
+    )
+    assert worker_main._handle({"run_id": str(run_id)}) is False
+
+
+def test_consume_once_leaves_processing_entry_when_attempt_loses_ownership(monkeypatch):
+    raw = json.dumps({"run_id": str(uuid4())})
+    r = FakeRedis(queue=[raw])
+    monkeypatch.setattr(worker_main, "handle", lambda _job: False)
+    assert worker_main.consume_once(r) is False
+    assert r.lists["triage:runs"] == []
+    assert r.lists["triage:runs:processing"] == [raw]

@@ -118,7 +118,9 @@ def _handle(job: dict) -> bool:
             )
             if persisted:
                 RUNS.labels("failed", EscalationReason.WORKER_FAILURE.value).inc()
-            return True
+                return True
+            log.warning("run %s attempt %s lost ownership before failure result", run_id, attempt)
+            return False
 
         status = RunStatus.escalated if rec.route == Route.escalate else RunStatus.done
         persisted = finish_run(
@@ -132,7 +134,7 @@ def _handle(job: dict) -> bool:
         )
         if not persisted:
             log.warning("run %s attempt %s lost ownership before finalization", run_id, attempt)
-            return True
+            return False
 
         reason = rec.escalation_reason.value if rec.escalation_reason else "none"
         RUNS.labels(rec.route.value, reason).inc()
