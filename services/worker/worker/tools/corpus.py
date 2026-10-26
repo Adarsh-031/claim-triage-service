@@ -1,47 +1,95 @@
-"""Fixture search for issue #6; full retrieval tools remain future work (A2)."""
+"""Read-only retrieval over the ingestion artifacts, with document-qualified edges."""
 from __future__ import annotations
 
+import json
+import re
+from functools import lru_cache
 from hashlib import sha256
+from pathlib import Path
 
 from triage_common.contracts import Chunk
+from triage_common.settings import settings
 
-DEMO_CORPUS_VERSION = "demo-fixture-v1"
-# Hand-written summaries, not authoritative legal source text. Keep fixture IDs
-# distinct from real ingested chunks so provenance is never confused.
-DEMO_CHUNKS = tuple(
-    Chunk(
-        chunk_id=f"DEMO-CAR:{clause_id}", doc_id="DEMO-CAR", clause_id=clause_id,
-        text=text, hash=sha256(text.encode()).hexdigest(),
-    )
-    for clause_id, text in [
-        ("3.3.1", "Cancellation: offer an alternate flight or refund acceptable to the passenger."),
-        ("3.3.2", "Cancellation: provide an acceptable alternate flight, or compensation and a full refund. "
-                    "Provide airport facilities while passengers already reported wait for the alternate flight."),
-        ("3.8.1(a)", "Meals and refreshments in relation to waiting time."),
-    ]
-)
+CAR_DOC = "CAR-S3-M-IV-R4"
+DEFAULT_CORPUS_DIR = Path(__file__).resolve().parents[4] / "corpus" / "processed"
+ARTIFACTS = ("chunks.jsonl", "refs.json", "definitions.json")
+
+
+def qualified(clause_id: str, doc_id: str = CAR_DOC) -> str:
+    return clause_id if ":" in clause_id else f"{doc_id}:{clause_id}"
+
+
+class Corpus:
+    def __init__(self, directory: Path):
+        contents = {name: (directory / name).read_bytes() for name in ARTIFACTS}
+        chunks = [Chunk.model_validate_json(line) for line in contents["chunks.jsonl"].splitlines() if line.strip()]
+        if not chunks or len({c.chunk_id for c in chunks}) != len(chunks):
+            raise ValueError("Corpus must contain nonempty, unique chunk IDs")
+        if any(sha256(c.text.encode()).hexdigest() != c.hash for c in chunks):
+            raise ValueError("Corpus chunk hash mismatch")
+        self.chunks = {c.chunk_id: c.model_dump(mode="json") for c in chunks}
+        self.clauses = {qualified(c.clause_id, c.doc_id): self.chunks[c.chunk_id] for c in chunks}
+        self.graph = json.loads(contents["refs.json"])
+        self.definitions = json.loads(contents["definitions.json"])
+        self.version = "processed-" + sha256(b"".join(contents.values())).hexdigest()[:16]
+
+    def clause(self, clause_id: str, doc_id: str = CAR_DOC) -> dict | None:
+        return self.clauses.get(qualified(clause_id, doc_id))
+
+
+@lru_cache(maxsize=2)
+def _load(directory: Path, signature: tuple) -> Corpus:
+    return Corpus(directory)
+
+
+def get_corpus() -> Corpus:
+    directory = Path(settings.corpus_dir) if settings.corpus_dir else DEFAULT_CORPUS_DIR
+    signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) for p in (directory / n for n in ARTIFACTS))
+    return _load(directory, signature)
 
 
 def search_corpus(query: str, k: int = 5, doc_id: str | None = None) -> list[dict]:
-    """Offline fixture search; cancellation queries include related airport facilities."""
-    if k <= 0 or "cancellation" not in query.lower():
+    """Deterministic lexical retrieval; graph expansion supplies modifying clauses.
+
+    Uses the same complete chunks as Chroma, without needing a vector service for
+    exact/graph research. Semantic/hybrid ranking can replace this baseline later.
+    """
+    if k <= 0:
         return []
-    return [
-        {**chunk.model_dump(mode="json"), "score": 1.0}
-        for chunk in DEMO_CHUNKS if doc_id is None or chunk.doc_id == doc_id
-    ][:k]
+    terms = set(re.findall(r"[\w.]+", query.casefold()))
+    ranked = []
+    for chunk in get_corpus().chunks.values():
+        if doc_id and chunk["doc_id"] != doc_id:
+            continue
+        words = set(re.findall(r"[\w.]+", chunk["text"].casefold()))
+        score = len(terms & words) / max(1, len(terms))
+        if score:
+            ranked.append({**chunk, "score": score})
+    return sorted(ranked, key=lambda c: (-c["score"], len(c["text"]), c["chunk_id"]))[:min(k, 10)]
 
 
-def get_clause(clause_id: str, doc_id: str = "CAR-S3-M-IV-R4") -> dict:
-    """Exact lookup by clause id, e.g. '3.3.2'."""
-    raise NotImplementedError
+def get_clause(clause_id: str, doc_id: str = CAR_DOC) -> dict | None:
+    return get_corpus().clause(clause_id, doc_id)
 
 
-def get_references(clause_id: str) -> list[str]:
-    """Clauses this clause points to (e.g. 3.3.2 -> 3.3.1, 3.8.1)."""
-    raise NotImplementedError
+def get_references(clause_id: str, doc_id: str = CAR_DOC) -> list[str]:
+    """Return qualified targets, preserving unresolved edges without guessing."""
+    return get_corpus().graph["refs"].get(qualified(clause_id, doc_id), [])
 
 
-def get_referrers(clause_id: str) -> list[str]:
-    """Clauses that point to this one (finds exemptions/modifiers)."""
-    raise NotImplementedError
+def get_referrers(clause_id: str, doc_id: str = CAR_DOC) -> list[str]:
+    return get_corpus().graph["referrers"].get(qualified(clause_id, doc_id), [])
+
+
+def get_definition(term: str, doc_id: str | None = None) -> list[dict]:
+    """Resolve definition records to their full, citable source chunks."""
+    corpus = get_corpus()
+    found = {}
+    for entry in corpus.definitions.get(term.strip().casefold(), []):
+        if doc_id and entry["doc_id"] != doc_id:
+            continue
+        chunk = corpus.chunks.get(entry["chunk_id"])
+        if chunk is None or entry["text"] not in chunk["text"]:
+            raise ValueError("Definition does not resolve to its source chunk")
+        found[chunk["chunk_id"]] = chunk
+    return list(found.values())

@@ -26,7 +26,7 @@ make corpus        # download/verify the manifest-pinned sources
 make ingest        # write corpus/processed/{chunks.jsonl,refs.json,definitions.json}
 ```
 
-See [the graph skeleton guide](docs/agent-graph.md) for the offline demo and budget behavior.
+See [the research graph guide](docs/agent-graph.md) for the offline demo and budget behavior.
 
 See [the ingestion guide](docs/ingestion.md) for artifact formats, reference resolution, and tests.
 
@@ -104,7 +104,7 @@ docs/              Requirements, design, report material, runbooks, incident log
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
 | P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing and retrieval checks |
-| P0 | Bounded LangGraph skeleton, cited demo case 4.1 | implemented with offline fixtures; full retrieval/reasoning pending |
+| P0 | Bounded research tool loop, cited demo case 4.1 | processed corpus, checklists and conflict escalation implemented; grounding verifier pending |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
 | P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | service/agent dashboards provisioned; scaling/cache/prompt studies pending |
 

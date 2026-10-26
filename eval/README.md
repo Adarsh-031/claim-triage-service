@@ -10,7 +10,7 @@ left out until the expected answers have been independently reviewed.
 | Delay | Two-hour short/long block-time thresholds; exact and over-six-hour remedy boundary; overnight and >24-hour hotel facilities |
 | Denied boarding | Alternate within one hour; alternate within 24 hours; no alternate; signed/unsigned voucher agreement |
 | Downgrade | Domestic involuntary downgrade reimbursement |
-| Escalation | Evidence needed to assess a technical-fault Force Majeure claim; Vietnam route outside corpus |
+| Escalation | Technical-fault CAR/CoC provision conflict; Vietnam route outside corpus |
 | Evidence and safety | Missing booking contact; prompt injection; malformed PNR and forbidden extra field |
 
 `tests/test_scenarios.py` checks every fixture against `ClaimIn`, expects invalid fixtures to fail
