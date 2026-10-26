@@ -4,9 +4,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select, update as sa_update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
+from .contracts import TERMINAL_STATUSES
 from .settings import settings
 
 
@@ -26,8 +27,9 @@ class Run(Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    requeue_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requeue_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -56,16 +58,8 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def init_db() -> None:
+    # Schema changes are applied through deploy/postgres/init.sql for fresh local volumes.
     Base.metadata.create_all(engine)
-    # create_all does not add columns to an existing runs table.
-    with engine.begin() as connection:
-        connection.exec_driver_sql(
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS requeue_count integer NOT NULL DEFAULT 0"
-        )
-        connection.exec_driver_sql("ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_at timestamptz")
-        connection.exec_driver_sql("ALTER TABLE runs ADD COLUMN IF NOT EXISTS finished_at timestamptz")
-        # Older versions called the successful terminal state completed.
-        connection.exec_driver_sql("UPDATE runs SET status = 'done' WHERE status = 'completed'")
 
 
 def list_quarantine(limit: int = 50) -> list[Quarantine]:
@@ -86,6 +80,87 @@ def update_run(run_id: uuid.UUID, **fields) -> None:
                 setattr(run, k, v)
 
 
+def claim_run(run_id: uuid.UUID, *, now: datetime | None = None) -> int | None:
+    """Atomically claim a queued run and return its recovery-attempt number."""
+    now = now or _now()
+    with SessionLocal() as session, session.begin():
+        result = session.execute(
+            sa_update(Run)
+            .where(Run.id == run_id, Run.status == "queued")
+            .values(status="running", started_at=now, heartbeat_at=now, finished_at=None,
+                    error=None, updated_at=now)
+        )
+        if result.rowcount != 1:
+            return None
+        return session.scalar(select(Run.requeue_count).where(Run.id == run_id))
+
+
+def heartbeat_run(run_id: uuid.UUID, attempt: int, *, now: datetime | None = None) -> bool:
+    """Refresh liveness only while this attempt still owns the running row."""
+    now = now or _now()
+    with SessionLocal() as session, session.begin():
+        result = session.execute(
+            sa_update(Run)
+            .where(Run.id == run_id, Run.status == "running", Run.requeue_count == attempt)
+            .values(heartbeat_at=now, updated_at=now)
+        )
+        return result.rowcount == 1
+
+
+def finish_run(run_id: uuid.UUID, attempt: int, **fields) -> bool:
+    """Persist a result only if this worker still owns the current running attempt."""
+    values = {**fields, "heartbeat_at": None, "updated_at": _now()}
+    with SessionLocal() as session, session.begin():
+        result = session.execute(
+            sa_update(Run)
+            .where(Run.id == run_id, Run.status == "running", Run.requeue_count == attempt)
+            .values(**values)
+        )
+        return result.rowcount == 1
+
+
+def recover_stale_run_state(
+    run: Run | None, *, now: datetime, stale_after_s: int = 30, max_requeues: int = 2
+) -> str:
+    """Apply recovery decisions without database or Redis I/O."""
+    if run is None:
+        return "missing"
+    if run.status in TERMINAL_STATUSES:
+        return "terminal"
+    if run.status not in {"queued", "running"}:
+        return "not_stale"
+
+    if run.status == "running":
+        anchor = getattr(run, "heartbeat_at", None) or run.started_at
+    else:
+        anchor = run.updated_at or run.created_at
+    if anchor is None:
+        return "not_stale"
+    if anchor.tzinfo is None and now.tzinfo is not None:
+        anchor = anchor.replace(tzinfo=now.tzinfo)
+    elif anchor.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=anchor.tzinfo)
+    if anchor > now - timedelta(seconds=stale_after_s):
+        return "not_stale"
+
+    if run.requeue_count >= max_requeues:
+        run.status = "failed"
+        run.error = "Run exceeded the configured recovery limit."
+        run.finished_at = now
+        run.heartbeat_at = None
+        run.updated_at = now
+        return "failed"
+
+    run.requeue_count += 1
+    run.status = "queued"
+    run.started_at = None
+    run.heartbeat_at = None
+    run.finished_at = None
+    run.error = None
+    run.updated_at = now
+    return "requeued"
+
+
 def recover_stale_run(
     run_id: uuid.UUID,
     *,
@@ -99,27 +174,6 @@ def recover_stale_run(
     status checks prevent the reaper from overwriting a result stored concurrently.
     """
     now = now or _now()
-    cutoff = now - timedelta(seconds=stale_after_s)
-    terminal_statuses = {"done", "completed", "escalated", "failed"}
     with SessionLocal() as session, session.begin():
         run = session.scalar(select(Run).where(Run.id == run_id).with_for_update())
-        if run is None:
-            return "missing"
-        if run.status in terminal_statuses:
-            return "terminal"
-        anchor = run.started_at or run.updated_at or run.created_at
-        if anchor is not None and anchor > cutoff:
-            return "not_stale"
-        if run.requeue_count >= max_requeues:
-            run.status = "failed"
-            run.error = f"Run exceeded {max_requeues} recovery attempts after {stale_after_s}s"
-            run.finished_at = now
-            run.updated_at = now
-            return "failed"
-        run.requeue_count += 1
-        run.status = "queued"
-        run.started_at = None
-        run.finished_at = None
-        run.error = None
-        run.updated_at = now
-        return "requeued"
+        return recover_stale_run_state(run, now=now, stale_after_s=stale_after_s, max_requeues=max_requeues)

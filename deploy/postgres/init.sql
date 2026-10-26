@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS runs (
     error text,
     requeue_count integer NOT NULL DEFAULT 0,
     started_at timestamptz,
+    heartbeat_at timestamptz,
     finished_at timestamptz,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL
