@@ -42,15 +42,31 @@ def target(tmp_path):
 
 def test_sync_idempotent_updates_metadata_and_prunes_stale(target):
     first, stale = chunk(), chunk("3.8.2", "Hotel accommodation")
-    assert sync([first, stale], target) == {"count": 2, "upserted": 2, "deleted": 0}
-    assert sync([first, stale], target) == {"count": 2, "upserted": 0, "deleted": 0}
+    assert sync([first, stale], target) == {
+        "count": 2, "upserted": 2, "deleted": 0, "embedding_cache_hits": 0
+    }
+    assert sync([first, stale], target) == {
+        "count": 2, "upserted": 0, "deleted": 0, "embedding_cache_hits": 0
+    }
     first.page = 7  # Provenance changes also invalidate the cached record.
     assert sync([first], target) == {"count": 1, "upserted": 1, "deleted": 1}
     assert verify([first], target)["count"] == 1
-    assert sync([first], target, force=True)["upserted"] == 1
+    forced = sync([first], target, force=True)
+    assert forced["upserted"] == 1
+    assert forced["embedding_cache_hits"] == 0
     first = chunk(text="Updated meals provision")
     assert sync([first], target)["upserted"] == 1
     assert verify([first], target)["count"] == 1
+
+
+def test_sync_reuses_embedding_when_metadata_changes_for_same_chunk_hash(target):
+    first = chunk()
+    sync([first], target)
+    updated = chunk()
+    updated.page = 9
+    result = sync([updated], target)
+    assert result["embedding_cache_hits"] == 1
+    assert target.get(ids=[updated.chunk_id], include=["metadatas"])["metadatas"][0]["page"] == 9
 
 
 def test_incompatible_collection_is_rejected(target):

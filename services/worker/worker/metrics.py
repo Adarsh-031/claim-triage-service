@@ -9,3 +9,4 @@ RUN_LATENCY = Histogram("agent_run_duration_seconds", "Worker execution time",
 STEPS = Histogram("agent_steps", "Work steps per run", buckets=(0, 1, 2, 3, 5, 8, 12, 20))
 TOOLS = Histogram("agent_tool_calls", "Tool reservations per run", buckets=(0, 1, 2, 5, 10, 15, 20))
 NODE_LATENCY = Histogram("agent_node_duration_seconds", "Graph node duration", ["node"])
+CACHE_HITS = Counter("worker_cache_hits_total", "Worker cache hits by component", ["component"])

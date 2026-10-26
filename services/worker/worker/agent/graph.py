@@ -173,10 +173,17 @@ def build_graph():
 GRAPH = build_graph()
 
 
-def run_agent(claim: dict, correlation_id: str = "", *, run_id: str | None = None) -> tuple[Result, list[dict]]:
+def run_agent(
+    claim: dict,
+    correlation_id: str = "",
+    *,
+    run_id: str | None = None,
+    prompt_version: str = "v1",
+    corpus_version: str = DEMO_CORPUS_VERSION,
+) -> tuple[Result, list[dict]]:
     out = GRAPH.invoke(
-        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
-         "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
+        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
+         "corpus_version": corpus_version, "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's
         # recursion guard remains a second safety net, not the budget mechanism.

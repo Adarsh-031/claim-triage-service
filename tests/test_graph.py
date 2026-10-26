@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from triage_common.cache import run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from worker import main as worker_main
 from worker.agent import graph
@@ -116,8 +117,10 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
     original_run_agent = graph.run_agent
 
-    def checked_run_agent(claim, correlation_id, *, run_id):
-        result, trace = original_run_agent(claim, correlation_id, run_id=run_id)
+    def checked_run_agent(claim, correlation_id, *, run_id, prompt_version="v1", corpus_version="demo-fixture-v1"):
+        result, trace = original_run_agent(
+            claim, correlation_id, run_id=run_id, prompt_version=prompt_version, corpus_version=corpus_version
+        )
         assert str(result.run_id) == run_id
         return result, trace
 
@@ -138,6 +141,42 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         assert rec.route is Route.ESCALATE
         assert rec.escalation_reason is EscalationReason.VERIFICATION_FAILED
         assert rec.citations
+
+
+def test_worker_returns_completed_result_from_run_cache(monkeypatch):
+    run_id = uuid4()
+    cached_result = {
+        "route": "escalate",
+        "summary": "cached",
+        "entitlements": [],
+        "compensation_inr": None,
+        "citations": [],
+        "escalation_reason": "VERIFICATION_FAILED",
+        "verified": False,
+        "requires_human_approval": True,
+    }
+    key = run_cache_key(SCENARIO["claim"], "v1", DEMO_CORPUS_VERSION, "unknown")
+
+    class FakeCache:
+        values = {key: json.dumps({"status": "escalated", "result": cached_result})}
+
+        def get(self, name):
+            return self.values.get(name)
+
+        def set(self, name, value, **_kwargs):
+            self.values[name] = value
+
+    updates = []
+    monkeypatch.setattr(worker_main, "cache_redis", FakeCache())
+    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+    monkeypatch.setattr(worker_main, "update_run", lambda rid, **fields: updates.append(fields))
+    monkeypatch.setattr(worker_main, "run_agent", lambda *_args, **_kwargs: pytest.fail("cache hit must skip graph"))
+
+    worker_main.handle({"run_id": str(run_id)})
+
+    assert updates[-1]["status"] == "escalated"
+    assert updates[-1]["result"] == cached_result
+    assert updates[-1]["trace"][0]["hit"] is True
 
 
 @pytest.mark.parametrize(("used", "invoked", "reserved"), [(13, True, 14), (14, False, 15), (15, False, 15)])

@@ -84,6 +84,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       chroma: { condition: service_healthy }
+      redis: { condition: service_healthy }
     command: ["sh", "-c", "python scripts/fetch_corpus.py && python cli/ingest.py && python cli/index_corpus.py && python cli/index_corpus.py --verify"]
     restart: "no"
 

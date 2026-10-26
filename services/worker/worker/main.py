@@ -10,16 +10,18 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
+from triage_common.cache import cache_get, cache_set, current_corpus_version, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
 from triage_common.settings import settings
 from triage_common.store import get_run, init_db, update_run
 from triage_common.telemetry import configure_tracing
 
 from .agent.graph import run_agent
-from .metrics import ACTIVE, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
+from .metrics import ACTIVE, CACHE_HITS, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
 
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
 log = logging.getLogger("worker")
+cache_redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 def handle(job: dict) -> None:
@@ -39,7 +41,29 @@ def _handle(job: dict) -> None:
     RUNS_STARTED.inc()
     update_run(run_id, status=RunStatus.running.value)
     try:
-        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id))
+        claim = dict(run.claim)
+        stored_prompt_version = claim.pop("prompt_version", settings.prompt_version)
+        client_scope = claim.pop("client_id", "unknown")
+        prompt_version = job.get("prompt_version") or stored_prompt_version
+        corpus_version = current_corpus_version(cache_redis)
+        cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
+        if settings.cache_enabled:
+            cached = cache_get(cache_redis, cache_key)
+            if cached:
+                update_run(run_id, status=cached["status"], result=cached["result"],
+                           trace=[{"step": "cache", "hit": True, "corpus_version": corpus_version}])
+                CACHE_HITS.labels("run").inc()
+                cached_result = cached["result"]
+                reason = cached_result.get("escalation_reason") or "none"
+                RUNS.labels(cached_result["route"], reason).inc()
+                return
+        result, trace = run_agent(
+            claim,
+            correlation_id=job.get("cid", ""),
+            run_id=str(run_id),
+            prompt_version=prompt_version,
+            corpus_version=corpus_version,
+        )
         # Preserve the API/store contract while the graph emits the stable Result.
         rec = Recommendation(
             route=result.route, summary=result.summary, compensation_inr=result.amount,
@@ -56,6 +80,13 @@ def _handle(job: dict) -> None:
         trace = [{"step": "error", "detail": str(e)}]
     status = RunStatus.escalated if rec.route == Route.escalate else RunStatus.completed
     update_run(run_id, status=status.value, result=rec.model_dump(mode="json"), trace=trace)
+    if settings.cache_enabled and rec.escalation_reason not in {
+        EscalationReason.PROVIDER_DEGRADED,
+        EscalationReason.WORKER_FAILURE,
+        EscalationReason.BUDGET_EXCEEDED,
+    }:
+        cache_set(cache_redis, cache_key, {"status": status.value, "result": rec.model_dump(mode="json")},
+                  settings.cache_ttl_s)
     reason = rec.escalation_reason.value if rec.escalation_reason else "none"
     RUNS.labels(rec.route.value, reason).inc()
     final = next((step for step in reversed(trace) if step.get("step") == "finalize"), {})
