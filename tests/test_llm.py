@@ -77,7 +77,7 @@ class StubLLM:
         self.responses = list(responses)
         self.calls = 0
 
-    def chat(self, _messages, _tools=None):
+    def chat(self, _messages, _tools=None, *, timeout_s=None):
         self.calls += 1
         response = self.responses.pop(0)
         if isinstance(response, Exception):
