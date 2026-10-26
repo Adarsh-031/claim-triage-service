@@ -117,7 +117,11 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         "get_run",
         lambda _: SimpleNamespace(claim=SCENARIO["claim"], status=RunStatus.queued.value),
     )
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
+    monkeypatch.setattr(worker_main, "claim_run",
+        lambda rid, now=None: (updates.append((rid, {"status": RunStatus.running.value, "started_at": now})) or 0))
+    monkeypatch.setattr(worker_main, "finish_run",
+        lambda rid, attempt, **update: (updates.append((rid, update)) or True))
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *_args, **_kwargs: True)
     original_run_agent = graph.run_agent
 
     def checked_run_agent(claim, correlation_id, *, run_id):
@@ -185,7 +189,11 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
         "get_run",
         lambda _: SimpleNamespace(claim=SCENARIO["claim"], status=RunStatus.queued.value),
     )
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append(update))
+    monkeypatch.setattr(worker_main, "claim_run",
+        lambda rid, now=None: (updates.append({"status": RunStatus.running.value, "started_at": now}) or 0))
+    monkeypatch.setattr(worker_main, "finish_run",
+        lambda rid, attempt, **update: (updates.append(update) or True))
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *_args, **_kwargs: True)
     worker_main.handle({"run_id": str(run_id)})
     saved = updates[-1]
     rec = Recommendation.model_validate(saved["result"])

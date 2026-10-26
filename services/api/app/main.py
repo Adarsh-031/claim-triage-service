@@ -23,6 +23,7 @@ from triage_common.contracts import (
     RunOut,
     RunStatus,
     SubmitOut,
+    TERMINAL_STATUSES,
 )
 from triage_common.settings import settings
 from triage_common.store import (
@@ -154,6 +155,7 @@ def get_run_status(run_id: uuid.UUID):
     return RunOut(
         run_id=run.id,
         status=run.status,
+        terminal=str(run.status) in TERMINAL_STATUSES,
         created_at=run.created_at,
         updated_at=run.updated_at,
         started_at=run.started_at,
