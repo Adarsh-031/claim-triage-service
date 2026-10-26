@@ -55,7 +55,7 @@ def test_s01_returns_valid_cited_result_and_ordered_trace(monkeypatch):
     assert [entry["step"] for entry in trace] == ["start", "intake", "research", "verify", "finalize"]
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 3
-    assert trace[-1]["tool_calls"] == 2
+    assert trace[-1]["tool_calls"] == 5
     assert trace[-2]["verified"] is False
 
 

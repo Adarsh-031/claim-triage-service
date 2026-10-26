@@ -155,6 +155,7 @@ def test_vector_backend_is_created_once_and_reused(monkeypatch):
     monkeypatch.setattr(corpus, "_VECTOR_BACKEND", None)
     monkeypatch.setattr(corpus.chromadb, "HttpClient", client_factory)
     monkeypatch.setattr(corpus, "DefaultEmbeddingFunction", embedding_factory)
+    monkeypatch.setattr(corpus, "_bm25_search", lambda query, k, doc_id: [])
     assert corpus._vector_search("cancellation", 3, None)
     assert corpus._vector_search("refund", 3, None)
     assert calls == {"client": 1, "embedding": 1}

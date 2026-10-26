@@ -121,7 +121,6 @@ def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
 
     class FakeTarget:
         def query(self, **kwargs):
-            assert kwargs["query_texts"] == ["cancellation compensation"]
             assert kwargs["where"] == {"doc_id": "CAR-S3-M-IV-R4"}
             if kwargs["query_texts"] == ["cancellation compensation"]:
                 return {"ids": [[

@@ -250,6 +250,24 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
         }),
     )
 
+    monkeypatch.setattr(
+        agent_graph,
+        "get_clause",
+        SimpleNamespace(invoke=lambda args: {
+            "chunk": {
+                "chunk_id": f"TRACE-CAR:{args['clause_id']}:0001",
+                "doc_id": "TRACE-CAR",
+                "clause_id": args["clause_id"],
+                "heading_path": ["3 Cancellation"],
+                "text": "Citation from a mocked exact-clause lookup.",
+                "hash": "b" * 64,
+                "page": None,
+                "refs": [],
+            },
+            "retrieval_error": None,
+        }),
+    )
+
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
