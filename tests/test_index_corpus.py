@@ -138,4 +138,10 @@ def test_verify_cancellation_retrieval_checks_vector_and_bm25_candidate_recall()
 
     result = verify_cancellation_retrieval(chunks, FakeTarget())
     assert result["cancellation_compensation_candidate_recall"] is True
-    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_top5"] or "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_clause_query_top5"] or "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_bm25_top5"]
+    expected_id = "CAR-S3-M-IV-R4:3.3.2:0001"
+    candidate_lists = (
+        result["cancellation_compensation_vector_top5"],
+        result["cancellation_compensation_clause_query_top5"],
+        result["cancellation_compensation_bm25_top5"],
+    )
+    assert any(expected_id in candidates for candidates in candidate_lists)
