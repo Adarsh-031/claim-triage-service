@@ -131,9 +131,9 @@ def submit_claim(claim: ClaimIn, request: Request):
                                  "messaging.system": "redis", "messaging.destination.name": settings.queue_name})
             carrier = {}
             inject(carrier)
-        r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
-                                               "prompt_version": prompt_version,
-                                                   "trace_context": carrier}))
+            r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
+                                                     "prompt_version": prompt_version,
+                                                     "trace_context": carrier}))
         CLAIMS.inc()
         return SubmitOut(run_id=run_id, status=RunStatus.queued, poll_url=f"/v1/runs/{run_id}")
 

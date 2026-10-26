@@ -251,6 +251,14 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     job = json.loads(fake_redis.lpush_calls[0][1])
     assert "traceparent" in job["trace_context"]
     assert job["prompt_version"] == "v2"
+    seen_prompt_versions = []
+    original_run_agent = worker.run_agent
+
+    def capture_prompt_version(*args, **kwargs):
+        seen_prompt_versions.append(kwargs["prompt_version"])
+        return original_run_agent(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "run_agent", capture_prompt_version)
     worker.handle(job)
     spans = exporter.get_finished_spans()
     publish = next(span for span in spans if span.name == "queue.publish")
@@ -262,6 +270,7 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     for name in ["agent.intake", "agent.research", "agent.verify", "agent.finalize", "tool.search_corpus"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
     assert updates[-1]["status"] == "escalated"
+    assert seen_prompt_versions == ["v2"]
     assert "pnr" not in str([dict(s.attributes) for s in spans])
 
     def fail(*args, **kwargs):
