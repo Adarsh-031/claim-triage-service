@@ -369,7 +369,7 @@ def test_source_ip_is_used_instead_of_caller_supplied_client_id():
     assert api._client_id(request) == "203.0.113.17"
 
 
-def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
+def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -402,7 +402,8 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     assert consume.parent.span_id == publish.context.span_id
     assert consume.attributes["run_id"] == response.json()["run_id"]
     assert consume.attributes["correlation_id"] == "trace-test"
-    for name in ["agent.intake", "agent.research", "agent.verify", "agent.finalize", "tool.search_corpus"]:
+    for name in ["agent.intake", "agent.research", "agent.draft", "agent.verify", "agent.finalize",
+                 "tool.search_corpus", "tool.get_references", "tool.compute_compensation"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
     assert updates[-1]["status"] == "escalated"
     assert "pnr" not in str([dict(s.attributes) for s in spans])
