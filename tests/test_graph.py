@@ -38,22 +38,19 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
         def get(self, name):
             return self.values.get(name)
 
-        def set(self, name, value, **_kwargs):
-            self.values[name] = value
-
     updates = []
     monkeypatch.setattr(worker_main, "cache_redis", FakeCache())
     monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **fields: updates.append(fields))
+    monkeypatch.setattr(worker_main, "claim_run", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(worker_main, "finish_run", lambda _rid, _attempt, **fields: (updates.append(fields) or True))
     monkeypatch.setattr(worker_main, "run_agent", lambda *_args, **_kwargs: pytest.fail("cache hit must skip graph"))
 
-    worker_main.handle({"run_id": str(run_id), "client_id": "unknown", "prompt_version": "v1"})
+    assert worker_main.handle({"run_id": str(run_id), "client_id": "unknown", "prompt_version": "v1"}) is True
 
     assert updates[-1]["status"] == "escalated"
     assert updates[-1]["result"] == cached_result
     assert updates[-1]["trace"][0]["hit"] is True
-
-
 def tool_call(name, **arguments):
     return {"id": "test-tool", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
 def test_s01_research_preserves_real_citations_and_requires_comparison_review():
