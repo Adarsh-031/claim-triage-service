@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from triage_common.contracts import TERMINAL_STATUSES
+
 
 def fetch(url: str, body: dict | None = None):
     request = Request(url, data=json.dumps(body).encode() if body is not None else None,
@@ -23,7 +25,7 @@ def check(api: str, jaeger: str, timeout: float = 60) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = fetch(api + f"/v1/runs/{run_id}")["status"]
-        if status in {"completed", "escalated", "failed"}:
+        if status in TERMINAL_STATUSES:
             break
         time.sleep(1)
     else:

@@ -1,41 +1,66 @@
 # Evaluation set (L3)
 
-The fixed scenario set currently contains 25 JSON cases (`s01`–`s25`). Each holds `claim`,
-`expected.route`, and the clause IDs an answer must rest on. Compensation amounts are deliberately
-left out until the expected answers have been independently reviewed.
+The 28 committed scenarios exercise cancellation, delay, denied boarding, downgrade,
+quarantine, missing evidence, and escalation. Their expected routes are acceptance
+criteria, not values rewritten to match today's agent. The independent grounding
+verifier remains incomplete, so safe escalation can legitimately fail a desired
+payment-route expectation.
 
-| Area | Examples |
-|---|---|
-| Cancellation | Demo alternate; notice under/over two weeks; late notice; missing contact; extraordinary circumstances |
-| Delay | Two-hour short/long block-time thresholds; exact and over-six-hour remedy boundary; overnight and >24-hour hotel facilities |
-| Denied boarding | Alternate within one hour; alternate within 24 hours; no alternate; signed/unsigned voucher agreement |
-| Downgrade | Domestic involuntary downgrade reimbursement |
-| Escalation | Technical-fault CAR/CoC provision conflict; Vietnam route outside corpus |
-| Evidence and safety | Missing booking contact; prompt injection; malformed PNR and forbidden extra field |
+## Run a measured comparison
 
-`tests/test_scenarios.py` checks every fixture against `ClaimIn`, expects invalid fixtures to fail
-validation, and verifies scenario IDs, expected-route metadata, and escalation reasons.
+1. Start the API and worker from this branch and ingest the corpus. Use the same
+   processed corpus locally and in the worker; the CLI rejects a corpus-version mismatch.
+2. Configure the research provider/model in `.env`. Export `EVAL_JUDGE_MODEL`,
+   `EVAL_JUDGE_API_KEY`, and optionally `EVAL_JUDGE_BASE_URL` in the CLI's environment.
+   These judge variables are separate from the worker provider. The CLI does not
+   load `.env` automatically. Never commit actual keys.
+3. Run `make eval`. This installs the locked `evaluation` dependency group and runs
+   every scenario with both prompts. Use `make eval PROMPT=v1` or `PROMPT=v2` for one.
 
-## Running the live evaluation
-
-Start the API and worker, then run both prompt versions with:
+The command writes `docs/eval-report.md`, raw run payloads and traces to
+`eval/results/eval-results.json`, and a copy of the Markdown report to that directory.
+Override paths and timing with `EVAL_ARGS`, for example:
 
 ```sh
-make eval
+make eval EVAL_ARGS='--api http://localhost:8000 --corpus-dir corpus/processed --timeout 180'
 ```
 
-Select a single version with `make eval PROMPT=v1` or `make eval PROMPT=v2`. The CLI
-submits each scenario with `X-Prompt-Version`, polls its run to completion, and writes
-`eval/results/eval-results.json` plus `eval/results/eval-report.md`. Both artifacts are
-generated outputs and are ignored by Git. Override `--api`, `--scenarios`,
-`--output-dir`, `--timeout`, or `--poll-interval` when invoking `uv run python
-cli/evaluate.py` directly.
+For plumbing checks without a judge, use `make eval EVAL_ARGS='--semantic off'`.
+Semantic scores then remain N/A. A stub-provider run is not evidence of prompt-quality
+improvement. CI runs this mode through real PostgreSQL, Redis, API, worker, and HTTP
+provider stub, and uploads the reports and service logs as `evaluation-smoke`.
 
-The report computes route accuracy, citation resolution against indexed source chunks
-(or presence of required citation fields if the corpus is not indexed), and recall of
-each scenario's `must_cite` clause list. It records exact run payloads and the
-`manifest.yaml` hash for audit. Semantic
-feedback metrics (groundedness, context relevance, answer relevance, hallucination
-rate) are explicitly `null` until a feedback provider is configured. On the current
-deterministic skeleton, v1/v2 are run metadata and their measured outputs may be
-identical; they are not evidence of a prompt-quality improvement.
+## What is measured
+
+- The worker appends `prompts/v1.md` or `v2.md` to its shared research system prompt.
+  The deliberate v2 change asks for rule-condition checks before the recommendation.
+  Both retain the same deterministic decision and independent-verification gates.
+  The intake trace records the executed version, which the CLI checks.
+- Citation accuracy requires the local chunk, document, clause, and exact nonempty
+  quote to match. Missing source data cannot score as a resolved citation.
+- Required-clause recall counts only citations that resolve to actual source chunks.
+- TruLens `OpenAI` feedback measures groundedness, context relevance across retrieved
+  passages, and answer relevance. Context is recovered from tool trace chunk IDs,
+  not just the passages the final answer chose to cite. Only allowlisted structured
+  claim facts are sent as the question, never PNR or passenger narrative.
+- Hallucination rate is the **1 − groundedness judge-score proxy**. It is not an
+  independently verified factual-error frequency. Each metric reports its measured
+  scenario count; missing context and judge failures remain explicit.
+- Raw artifacts preserve run IDs, terminal payloads, traces, prompt hashes, corpus
+  hash, and provider model identity for scored cases. Worker failures and wrong
+  executed prompt/corpus versions are errors, not correct escalations.
+- `expected.compensation_inr`, when present, is compared with the API result and
+  reported as amount accuracy separately from route accuracy.
+
+## Outstanding acceptance evidence
+
+A live model/judge comparison must still be run and reviewed before claiming a
+prompt-quality improvement. CI smoke reports validate the workflow only.
+
+The current `ClaimIn` schema has a total `ticket_fare_inr` but does not accept the
+calculator's basic fare, fuel charge, or downgrade ticket-cost inputs. Do not invent
+payable scenario amounts from that total or change the gold routes to force a pass.
+Populate reviewed `expected.compensation_inr` amounts when those eligibility/monetary
+inputs are supported by the API; until then amount accuracy is N/A for those cases.
+
+TruLens API reference: https://www.trulens.org/reference/trulens/providers/openai/provider/

@@ -43,7 +43,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "research-v1"
+    assert result.prompt_version == "v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
@@ -196,24 +196,42 @@ def test_terminal_step_reservation_skips_node_side_effects():
     assert out["step_count"] == 12 and out["budget_exceeded"] is True
 
 
+def _mock_worker_store(monkeypatch):
+    updates = []
+    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+
+    def claim(run_id, *, now):
+        updates.append((run_id, {"status": RunStatus.running.value}))
+        return 1
+
+    def finish(run_id, attempt, **update):
+        assert attempt == 1
+        updates.append((run_id, update))
+        return True
+
+    monkeypatch.setattr(worker_main, "claim_run", claim)
+    monkeypatch.setattr(worker_main, "finish_run", finish)
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *args, **kwargs: True)
+    return updates
+
+
 @pytest.mark.parametrize("budget_exhausted", [False, True])
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
-    updates = []
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
+    updates = _mock_worker_store(monkeypatch)
     original = graph.run_agent
 
-    def checked_run_agent(claim, correlation_id, *, run_id, prompt_version="v1"):
-        result, trace = original_run_agent(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
+    def checked(claim, correlation_id, *, run_id, prompt_version="v1"):
+        result, trace = original(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
         assert str(result.run_id) == run_id
         return result, trace
 
     monkeypatch.setattr(worker_main, "run_agent", checked)
     if budget_exhausted:
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
-    worker_main.handle({"run_id": str(run_id), "cid": "worker-test"})
+    assert worker_main.handle({"run_id": str(run_id), "cid": "worker-test"}) is True
     assert updates[0] == (run_id, {"status": RunStatus.running.value})
+    assert updates[-1][0] == run_id
     final = updates[-1][1]
     rec = Recommendation.model_validate(final["result"])
     assert final["status"] == "escalated"
@@ -230,11 +248,9 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
         return {**original(state), "route": route, "summary": "Unverified decision", "amount": 1000}
 
     monkeypatch.setattr(graph, "make_draft", consequential)
-    updates = []
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append(update))
-    worker_main.handle({"run_id": str(uuid4())})
-    saved = updates[-1]
+    updates = _mock_worker_store(monkeypatch)
+    assert worker_main.handle({"run_id": str(uuid4())}) is True
+    saved = updates[-1][1]
     rec = Recommendation.model_validate(saved["result"])
     assert saved["status"] == "escalated"
     assert rec.escalation_reason is EscalationReason.VERIFICATION_FAILED
@@ -361,3 +377,20 @@ def test_relevant_citations_with_model_conflict_still_require_independent_review
     draft = next(t for t in trace if t["step"] == "draft")
     assert draft["checklist"]["airline_comparison"]["status"] == "missing"
     assert draft["route"] is Route.REQUEST_EVIDENCE
+
+
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_selected_prompt_content_reaches_provider(monkeypatch, version):
+    seen = []
+
+    def chat(messages, tools, **kwargs):
+        seen.append(messages[0]["content"])
+        raise httpx.ConnectError("stop after observing real provider input")
+
+    monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=chat))
+    _, trace = graph.run_agent(SCENARIO["claim"], prompt_version=version)
+    expected = (graph.PROMPT_PATH.parent / f"{version}.md").read_text(encoding="utf-8")
+    other = (graph.PROMPT_PATH.parent / f"{'v2' if version == 'v1' else 'v1'}.md").read_text(encoding="utf-8")
+    assert expected in seen[0] and other not in seen[0]
+    intake = next(s for s in trace if s["step"] == "intake")
+    assert intake["prompt_version"] == version

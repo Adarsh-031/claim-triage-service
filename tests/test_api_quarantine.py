@@ -199,7 +199,7 @@ def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", FakeRedis())
     claim = demo_claim()
-    claim["statement"] = "✈" * 7_000
+    claim["statement"] = "\u2708" * 7_000
 
     response = client.post("/v1/claims", json=claim)
 
@@ -241,7 +241,9 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     monkeypatch.setattr(api, "r", fake_redis)
     monkeypatch.setattr(worker, "get_run", lambda _: stored[0])
     updates = []
-    monkeypatch.setattr(worker, "update_run", lambda *args, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, now=None: 0)
+    monkeypatch.setattr(worker, "finish_run", lambda _run_id, attempt, **kwargs: (updates.append(kwargs) or True))
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
     response = client.post("/v1/claims", json=demo_claim(), headers={
         "traceparent": "00-12345678901234567890123456789012-1234567890123456-01",
         "x-correlation-id": "trace-test",
@@ -282,7 +284,11 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     failed_span = [s for s in exporter.get_finished_spans() if s.name == "queue.process"][-1]
     assert failed_span.status.status_code == trace.StatusCode.ERROR
     assert any(event.name == "exception" for event in failed_span.events)
-    assert updates[-1]["result"]["escalation_reason"] == "PROVIDER_DEGRADED"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["result"]["route"] == "escalate"
+    assert updates[-1]["error"] == worker.PUBLIC_WORKER_ERROR
+    assert "provider unavailable" in str(updates[-1]["trace"])
+    assert updates[-1]["finished_at"] is not None
 
 
 def test_submit_rejects_unknown_prompt_version():

@@ -18,6 +18,7 @@ from opentelemetry.trace import SpanKind
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import text
 from triage_common.contracts import (
+    TERMINAL_STATUSES,
     ClaimIn,
     FeedbackIn,
     Recommendation,
@@ -87,7 +88,7 @@ def _rate_limited(client: str) -> bool:
 async def quarantine_invalid(request: Request, exc: RequestValidationError):
     """Invalid claims are stored in quarantine with field-level errors; no agent run starts."""
     raw = await request.body()
-    body = raw[:RAW_BODY_LIMIT].decode("utf-8", errors="replace")
+    body = raw.decode("utf-8", errors="replace").encode("utf-8")[:RAW_BODY_LIMIT].decode("utf-8", errors="ignore")
     errors = [
         {
             "field": ".".join(map(str, error["loc"][1:])) or "body",
@@ -158,8 +159,17 @@ def get_run_status(run_id: uuid.UUID):
     run = get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
-    return RunOut(run_id=run.id, status=run.status, created_at=run.created_at, updated_at=run.updated_at,
-                  result=Recommendation(**run.result) if run.result else None, error=run.error)
+    return RunOut(
+        run_id=run.id,
+        status=run.status,
+        terminal=str(run.status) in TERMINAL_STATUSES,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        result=Recommendation(**run.result) if run.result else None,
+        error=run.error,
+    )
 
 
 @app.get("/v1/runs/{run_id}/trace")

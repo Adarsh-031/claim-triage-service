@@ -110,6 +110,27 @@ new collection name; incompatible collection metadata fails rather than mixing v
 The agent graph still uses issue #6's demo fixture search. This check verifies the
 real corpus index independently; it does not imply the graph uses authoritative retrieval.
 
+## Upgrade an existing PostgreSQL volume for worker recovery
+
+Fresh databases get the recovery columns from `deploy/postgres/init.sql`. Existing
+PostgreSQL volumes are not altered by SQLAlchemy `create_all()`; before deploying
+this worker version to an existing volume, apply the idempotent migration with the
+database deployment/owner account:
+
+```sql
+-- deploy/postgres/migrations/20261026_worker_reliability.sql
+ALTER TABLE runs
+    ADD COLUMN IF NOT EXISTS requeue_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS started_at timestamptz,
+    ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz,
+    ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+```
+
+Run it once against the target database using your normal controlled migration
+process. Do not put schema-altering statements back into API or worker startup.
+Verify the columns exist before rolling out the worker; otherwise mapped queries
+may fail on an older `runs` table.
+
 ## Redis queue backlog is growing
 
 **Symptom:** Claims remain `queued`, or the number of waiting jobs keeps increasing.
@@ -120,10 +141,12 @@ real corpus index independently; it does not imply the graph uses authoritative 
 docker compose ps api worker redis
 docker compose logs --tail=100 worker redis
 docker compose exec redis redis-cli LLEN triage:runs
+docker compose exec redis redis-cli LLEN triage:runs:processing
 ```
 
-The queue command reports waiting jobs; a job currently being processed is not in
-that list.
+The first queue command reports waiting jobs; a job currently being processed is in
+`triage:runs:processing`. Each running job refreshes its database heartbeat every
+10 seconds. The reaper only recovers entries after three missed heartbeat intervals.
 
 **Fix:** Choose the recovery action that matches the confirmed cause. If Redis is
 unhealthy, restart Redis and wait for its health check before taking further action:
@@ -141,9 +164,9 @@ docker compose up -d --scale worker=3
 ```
 
 If a worker has exited, inspect the affected run IDs before restarting it. The worker
-removes a job from Redis before processing and does not requeue it after a crash, so
-restarting can leave that run stuck and will not recover its job automatically.
-Restart only the stopped worker after recording affected runs:
+moves a job atomically into `triage:runs:processing`; after a crash, the independent
+reaper recovers it after the heartbeat becomes stale. Restart only the stopped worker
+after recording affected runs:
 
 ```bash
 docker compose restart worker
@@ -152,7 +175,7 @@ docker compose restart worker
 Do not delete or flush the Redis queue as a backlog fix.
 
 **Verify:** Confirm Redis and workers are healthy, `LLEN triage:runs` is trending
-down, and queued runs reach `completed`, `escalated`, or `failed` when polled through
+down, and queued runs reach `done`, `escalated`, or `failed` when polled through
 the API.
 
 ## Verifier worker crash
@@ -177,14 +200,20 @@ issue #6.**
 docker compose restart worker
 ```
 
-The current consumer removes a job from Redis before processing it and does not
-acknowledge/requeue a job after a crash. Inspect affected run IDs through the API;
-do not assume a run interrupted by a worker crash will be retried automatically.
+The consumer keeps an unacknowledged job in `triage:runs:processing`. A run with no
+fresh heartbeat is requeued up to two times, then marked failed. The worker only
+persists a result if its attempt still owns the running row, so a late worker cannot
+overwrite a newer attempt.
 
 **Verify:** Confirm the `worker` container is running and its logs show `worker
-started`. Submit a new demo claim and poll it to a terminal status. The new claim
-verifies the current worker path; it does not provide the missing independent
-verifier guarantee.
+started`. Submit a demo claim and poll `GET /v1/runs/{run_id}`; lifecycle timestamps
+should be present and the response's `terminal` flag should become true. To exercise
+crash recovery on a deliberately long-running local job, stop the worker while its
+heartbeat is active, start it again, and confirm the run is requeued once its heartbeat
+ages past 30 seconds. This local graph fixture normally completes quickly, so a genuine
+mid-run crash check needs a controlled delay in the execution path. The fixture still
+escalates because verification is pass-through; it does not provide the missing
+independent verifier guarantee.
 
 ## Re-ingest the source corpus
 
