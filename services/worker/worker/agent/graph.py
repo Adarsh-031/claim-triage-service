@@ -6,6 +6,7 @@ Finalization is outside the work-step budget so exhaustion always yields a Resul
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from collections.abc import Callable
 from functools import wraps
 from uuid import uuid4
@@ -21,6 +22,7 @@ from .intake import IntakeError, LocalStructuredStubLLM, extract_intake, is_in_s
 from .llm import get_llm
 
 PROMPT_VERSION = "intake-v1"
+_INTAKE_LLM: ContextVar[object | None] = ContextVar("intake_llm", default=None)
 
 
 def _log(state: RunState, step: str, **detail: object) -> None:
@@ -68,7 +70,7 @@ def intake(state: RunState) -> RunState:
         }
     else:
         try:
-            facts = extract_intake(claim, llm=state.get("intake_llm"))
+            facts = extract_intake(claim, llm=_INTAKE_LLM.get())
             state["facts"] = facts.model_dump()
         except IntakeError as exc:
             state["facts"] = structured_claim_facts(claim)
@@ -203,12 +205,16 @@ def run_agent(
     # passes its configured provider explicitly for real stub/production calls.
     if llm is None:
         llm = LocalStructuredStubLLM() if settings.llm_provider == "stub" else get_llm()
-    out = GRAPH.invoke(
-        {"claim": claim, "intake_llm": llm, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
-         "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
-         "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
-        # Allow finalization after the last permitted work step; LangGraph's
-        # recursion guard remains a second safety net, not the budget mechanism.
-        {"recursion_limit": settings.agent_max_steps + 2},
-    )
+    token = _INTAKE_LLM.set(llm)
+    try:
+        out = GRAPH.invoke(
+            {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
+             "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
+             "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
+            # Allow finalization after the last permitted work step; LangGraph's
+            # recursion guard remains a second safety net, not the budget mechanism.
+            {"recursion_limit": settings.agent_max_steps + 2},
+        )
+    finally:
+        _INTAKE_LLM.reset(token)
     return Result.model_validate(out["result"]), out.get("trace", [])

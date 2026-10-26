@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 
 def _configured_delay() -> float:
@@ -56,37 +57,13 @@ SCRIPTED_INTAKE_RESPONSES: dict[str, dict[str, Any]] = {
 }
 
 
-def _intake_stub_content(messages: list[dict[str, Any]]) -> str | None:
-    user = next((str(message.get("content", "")) for message in messages if message.get("role") == "user"), "")
-    if "<claim_json>" not in user:
-        return None
-    import json
-    import re
+def _intake_stub_content(scenario_id: str | None = None) -> str | None:
+    # Script selection is available only to local test callers via an HTTP header.
+    # Ordinary claim JSON cannot select a canned response or steer production behavior.
+    scripted = SCRIPTED_INTAKE_RESPONSES.get(scenario_id or "")
+    return json.dumps(scripted) if scripted is not None else None
 
-    match = re.search(r"<claim_json>(.*?)</claim_json>", user, flags=re.DOTALL)
-    if not match:
-        return "{}"
-    try:
-        claim = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return "{}"
-    scenario_id = claim.get("_scenario_id")
-    scripted = SCRIPTED_INTAKE_RESPONSES.get(scenario_id)
-    if scripted is not None:
-        return json.dumps(scripted)
-    alternate = claim.get("alternate") or {}
-    disruption = claim.get("disruption_type")
-    if disruption in (None, "unknown"):
-        disruption = "other"
-    return json.dumps({
-        "disruption_type": disruption,
-        "notice_minutes_before_departure": claim.get("notice_minutes_before_departure"),
-        "block_time_minutes": claim.get("block_time_minutes"),
-        "alternate_offered": alternate.get("offered"),
-        "alternate_accepted": alternate.get("accepted"),
-        "contact_details_given": claim.get("contact_info_provided"),
-        "stated_cause": claim.get("stated_cause"),
-    })
+
 app = FastAPI(title="LLM Stub", version="1.0.0")
 
 
@@ -96,10 +73,10 @@ def healthz() -> dict[str, str]:
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(payload: dict[str, Any]) -> dict[str, Any]:
+async def chat_completions(payload: dict[str, Any], request: Request) -> dict[str, Any]:
     """Return a stable response matching the OpenAI Chat Completions schema."""
     await asyncio.sleep(STUB_DELAY)
-    scripted_content = _intake_stub_content(payload.get("messages") or [])
+    scripted_content = _intake_stub_content(request.headers.get("x-stub-scenario"))
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",

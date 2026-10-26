@@ -192,6 +192,25 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
     assert rec.citations
 
 
+def test_prompt_injection_cannot_change_route_or_create_amount():
+    claim = json.loads((Path(__file__).parents[1] / "eval/scenarios/s23_statement_prompt_injection.json").read_text())["claim"]
+
+    class HostileLLM:
+        def chat(self, messages, tools=None):
+            return {"content": json.dumps({
+                "disruption_type": "delay", "notice_minutes_before_departure": None,
+                "block_time_minutes": None, "alternate_offered": None, "alternate_accepted": None,
+                "contact_details_given": None, "stated_cause": None,
+            })}
+
+    result, trace = graph.run_agent(claim, llm=HostileLLM())
+    assert result.route is Route.ESCALATE
+    assert result.amount is None
+    intake_trace = next(item for item in trace if item["step"] == "intake")
+    assert intake_trace["facts"]["disruption_type"] == "cancellation"
+    assert "400%" not in str(intake_trace["facts"])
+
+
 def test_vietnam_route_is_escalated_before_retrieval():
     scenario_path = Path(__file__).parents[1] / "eval/scenarios/s22_vietnam_route_out_of_corpus.json"
     claim = json.loads(scenario_path.read_text())["claim"]

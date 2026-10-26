@@ -15,8 +15,9 @@ Disruption = Literal["cancellation", "delay", "denied_boarding", "downgrade", "o
 PROMPT_VERSION = "intake-v1"
 _PROMPT_FILES = {PROMPT_VERSION: Path(__file__).resolve().parents[4] / "prompts" / "intake_v1.md"}
 
-# Common Indian commercial passenger airports. Unknown/non-Indian origins are kept
-# out of the India-only corpus and routed for human review rather than guessed.
+# The corpus covers Indian-origin flights, including international services departing India;
+# route scope is based on origin, not destination. This curated IATA list keeps unknown origins
+# out of the India-focused corpus and routes them for human review rather than guessing.
 _INDIA_ORIGINS = {
     "AGR", "AMD", "ATQ", "BBK", "BDQ", "BBI", "BHO", "BLR", "BOM", "CCJ", "CCU",
     "CJB", "COK", "DED", "DEL", "DGH", "DIB", "DIU", "DMU", "GAU", "GAY", "GOP",
@@ -47,7 +48,7 @@ def structured_claim_facts(claim: dict[str, Any]) -> dict[str, Any]:
     if disruption == "unknown":
         disruption = None
     return {
-        "disruption_type": disruption or "other",
+        "disruption_type": disruption,
         "notice_minutes_before_departure": claim.get("notice_minutes_before_departure"),
         "block_time_minutes": claim.get("block_time_minutes"),
         "alternate_offered": alternate.get("offered"),
@@ -67,8 +68,7 @@ class LocalStructuredStubLLM:
             return {"content": "{}"}
         claim = json.loads(match.group(1))
         facts = structured_claim_facts(claim)
-        facts["conflicts"] = []
-        return {"content": json.dumps({key: value for key, value in facts.items() if key != "conflicts"})}
+        return {"content": json.dumps(facts)}
 
 
 class IntakeFacts(BaseModel):
