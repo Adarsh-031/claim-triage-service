@@ -72,7 +72,7 @@ def _handle(job: dict) -> bool:
     # Compare-and-set claim: only one worker can transition queued -> running.
     attempt = claim_run(run_id, now=datetime.now(UTC))
     if attempt is None:
-        return True
+        return False
 
     RUNS_STARTED.inc()
     heartbeat_stop = Event()
