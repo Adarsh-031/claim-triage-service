@@ -154,7 +154,7 @@ escalate. Maximum 2 retries (demo 6).
 | `get_referrers` | `(clause_id) -> [clause_id]` | Clauses that cite this one (finds modifiers/exemptions) |
 | `get_definition` | `(term) -> Chunk` | Section 2 definitions, e.g. "block time" |
 | `get_claim_field` | `(name) -> value` | The claim's own validated fields |
-| `compute_compensation` | `(clause_id, inputs) -> {amount_inr, formula, clause_id}` | Pure code; tiers verified against CAR text |
+| `compute_compensation` | `(clause_id, inputs) -> {status, amount, formula, clause_id, inputs_used, missing_fields}` | Deterministic calculator exists; current LangGraph skeleton does not register or invoke it. See [compensation workflow status](compensation.md#workflow-integration-status). |
 
 Every tool call is a traced span and a `steps` row (input, output size, latency).
 
