@@ -197,6 +197,11 @@ class RunState(TypedDict, total=False):
     claim: dict[str, object]
     facts: dict[str, object]
     retrieved: list[dict[str, object]]
+    messages: list[dict]
+    checklist: dict[str, dict]
+    research_report: dict | None
+    research_complete: bool
+    compensation: dict | None
     draft: dict[str, object] | None
     verified: bool
     attempts: int
