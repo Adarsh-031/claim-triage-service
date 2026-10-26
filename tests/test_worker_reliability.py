@@ -102,7 +102,9 @@ def test_recovery_state_fails_stale_run_at_retry_limit_without_requeueing():
     assert run.requeue_count == 2
     assert run.finished_at == now
     assert run.heartbeat_at is None
-    assert run.error == "Run exceeded the configured recovery limit."
+    assert run.error == "Automated processing failed after recovery attempts; human review is required."
+    assert run.result["route"] == Route.ESCALATE.value
+    assert run.result["escalation_reason"] == "WORKER_FAILURE"
 
 
 def test_terminal_or_future_handoff_state_is_not_requeued():

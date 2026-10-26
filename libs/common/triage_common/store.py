@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select, update as sa_update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from .contracts import TERMINAL_STATUSES
+from .contracts import EscalationReason, Recommendation, Route, TERMINAL_STATUSES
 from .settings import settings
 
 
@@ -145,7 +145,13 @@ def recover_stale_run_state(
 
     if run.requeue_count >= max_requeues:
         run.status = "failed"
-        run.error = "Run exceeded the configured recovery limit."
+        run.error = "Automated processing failed after recovery attempts; human review is required."
+        run.result = Recommendation(
+            route=Route.ESCALATE,
+            summary="Automated processing failed after recovery attempts. Human review is required.",
+            escalation_reason=EscalationReason.WORKER_FAILURE,
+            verified=False,
+        ).model_dump(mode="json")
         run.finished_at = now
         run.heartbeat_at = None
         run.updated_at = now
