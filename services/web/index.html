@@ -100,7 +100,6 @@
     const formMessage = document.getElementById("form-message");
     const submitButton = document.getElementById("submit-button");
     const demoButton = document.getElementById("demo-button");
-    const terminalStatuses = new Set(["done", "completed", "escalated", "failed"]);
     let activeRunId = null;
     let pollToken = 0;
 
@@ -224,7 +223,7 @@
       traceButton.type = "button";
       traceButton.addEventListener("click", () => loadTrace(run.run_id, traceButton));
       result.append(traceButton);
-      if (["done", "completed", "escalated"].includes(run.status)) renderFeedback(run.run_id);
+      if (run.terminal && run.status !== "failed") renderFeedback(run.run_id);
     }
 
     async function loadTrace(runId, button) {
@@ -288,7 +287,7 @@
         const response = await fetch(url);
         const run = await response.json();
         if (!response.ok) throw new Error(run.detail || "Could not read claim status.");
-        if (terminalStatuses.has(run.status)) {
+        if (run.terminal) {
           activeRunId = runId;
           renderRun(run);
           return;

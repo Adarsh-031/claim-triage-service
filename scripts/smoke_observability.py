@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 from urllib.parse import urlencode
+
+from triage_common.contracts import TERMINAL_STATUSES
 from urllib.request import Request, urlopen
 
 
@@ -23,7 +25,7 @@ def check(api: str, jaeger: str, timeout: float = 60) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = fetch(api + f"/v1/runs/{run_id}")["status"]
-        if status in {"done", "completed", "escalated", "failed"}:
+        if status in TERMINAL_STATUSES:
             break
         time.sleep(1)
     else:
