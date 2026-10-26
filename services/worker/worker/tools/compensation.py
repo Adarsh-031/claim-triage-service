@@ -140,12 +140,8 @@ def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
     if refund_taken is not None:
         used["refund_taken"] = refund_taken
 
-    # CAR 3.3.1: at least two weeks' notice is outside the 3.3.2 compensation trigger.
-    if notice >= 14 * 24 * 60:
-        return _zero("3.3.1", "informed 2+ weeks ahead, 3.3.1", used)
-
-    # Between 24 hours and two weeks, an alternate or refund offered as acceptable
-    # to the passenger satisfies 3.3.1. At exactly 24 hours this band still applies.
+    # CAR 3.3.1 requires an arrangement as well as notice in both notice bands.
+    # At exactly 24 hours the middle band still applies.
     if notice >= 24 * 60:
         offered = inputs.get("alternate_or_refund_offered")
         if offered is None:
@@ -153,9 +149,14 @@ def _cancellation(inputs: dict[str, Any]) -> CompensationResult:
         offered = _boolean(offered, "alternate_or_refund_offered")
         used["alternate_or_refund_offered"] = offered
         if offered:
+            reason = (
+                "informed 2+ weeks ahead and alternate/refund arranged, 3.3.1"
+                if notice >= 14 * 24 * 60
+                else "alternate or refund offered, 3.3.1"
+            )
             return _zero(
                 "3.3.1",
-                "alternate or refund offered, 3.3.1",
+                reason,
                 used,
             )
 
@@ -196,10 +197,29 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
     declined = _boolean(declined, "alternate_declined")
 
     alternate = inputs.get("alternate_arranged")
+    delay = inputs.get("alternate_departure_delay_minutes")
     if declined:
+        if alternate is None:
+            return _needs_evidence(clause, "alternate_arranged")
+        alternate = _boolean(alternate, "alternate_arranged")
+        if alternate:
+            if delay is None:
+                return _needs_evidence(clause, "alternate_departure_delay_minutes")
+            delay = _integer(delay, "alternate_departure_delay_minutes")
+            if delay <= 60:
+                return _zero(
+                    clause,
+                    "alternate arranged to depart within one hour, 3.2.2",
+                    {
+                        "alternate_arranged": True,
+                        "alternate_declined": True,
+                        "alternate_departure_delay_minutes": delay,
+                    },
+                )
         used: dict[str, Any] = {"alternate_declined": True}
-        if alternate is not None:
-            used["alternate_arranged"] = _boolean(alternate, "alternate_arranged")
+        used["alternate_arranged"] = alternate
+        if delay is not None:
+            used["alternate_departure_delay_minutes"] = delay
         subclause, multiplier, cap = "3.2.2(c)", Decimal(4), Decimal(20000)
         formula = "min(400% × (booked one-way basic fare + airline fuel charge), INR 20,000)"
     else:
@@ -207,8 +227,7 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
             return _needs_evidence(clause, "alternate_arranged")
         alternate = _boolean(alternate, "alternate_arranged")
         if not alternate:
-            return _needs_evidence(clause, "alternate_choice")
-        delay = inputs.get("alternate_departure_delay_minutes")
+            return _needs_evidence(clause, "alternate_declined")
         if delay is None:
             return _needs_evidence(clause, "alternate_departure_delay_minutes")
         delay = _integer(delay, "alternate_departure_delay_minutes")

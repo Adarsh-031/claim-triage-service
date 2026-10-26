@@ -36,12 +36,26 @@ def test_cancellation_tier_a():
     assert (result.amount, result.clause_id) == (5000, "3.3.2(a)")
 
 
+def test_cancellation_tier_a_fare_below_cap():
+    result = compute_compensation(
+        "3.3.2", cancellation_inputs(block_time_minutes=60, one_way_basic_fare_inr=3000, airline_fuel_charge_inr=0)
+    )
+    assert (result.amount, result.clause_id) == (3000, "3.3.2(a)")
+
+
 # CAR 3.3.2(b): "INR 7,500 or booked one-way basic fare plus airline fuel charge, whichever is less"
 def test_cancellation_tier_b():
     result = compute_compensation(
         "3.3.2", cancellation_inputs(block_time_minutes=61, one_way_basic_fare_inr=10_000, airline_fuel_charge_inr=0)
     )
     assert (result.amount, result.clause_id) == (7500, "3.3.2(b)")
+
+
+def test_cancellation_tier_b_fare_below_cap():
+    result = compute_compensation(
+        "3.3.2", cancellation_inputs(block_time_minutes=61, one_way_basic_fare_inr=4000, airline_fuel_charge_inr=0)
+    )
+    assert (result.amount, result.clause_id) == (4000, "3.3.2(b)")
 
 
 # CAR 3.3.2(c): "INR 10,000 or booked one-way basic fare plus airline fuel charge, whichever is less"
@@ -74,7 +88,21 @@ def test_denied_boarding_passenger_declines_alternate():
     assert "refund" not in result.formula  # The amount field is compensation; ticket refund is separate.
 
 
-# CAR 3.5.1(a): "For domestic sector:-75% of the cost of ticket including taxes."
+def test_denied_boarding_declined_alternate_within_one_hour_is_zero():
+    result = compute_compensation(
+        "3.2.2", denied_boarding_inputs(alternate_declined=True, alternate_departure_delay_minutes=60)
+    )
+    assert (result.amount, result.clause_id) == (0, "3.2.2")
+
+
+def test_denied_boarding_declined_alternate_missing_delay_needs_evidence():
+    inputs = denied_boarding_inputs(alternate_declined=True)
+    del inputs["alternate_departure_delay_minutes"]
+    result = compute_compensation("3.2.2", inputs)
+    assert result.status == "needs_evidence"
+    assert result.missing_fields == ("alternate_departure_delay_minutes",)
+
+
 def test_denied_boarding_missing_passenger_choice_needs_evidence():
     inputs = denied_boarding_inputs()
     del inputs["alternate_declined"]
@@ -88,9 +116,10 @@ def test_denied_boarding_no_arrangement_without_decline_is_not_tier_c():
         "3.2.2", denied_boarding_inputs(alternate_arranged=False, alternate_declined=False)
     )
     assert result.status == "needs_evidence"
-    assert result.missing_fields == ("alternate_choice",)
+    assert result.missing_fields == ("alternate_declined",)
 
 
+# CAR 3.5.1(a): "For domestic sector:-75% of the cost of ticket including taxes."
 def test_domestic_downgrade_tier():
     result = compute_compensation(
         "3.5.1", {"sector": "domestic", "ticket_cost_including_taxes_inr": 10_000}
@@ -138,13 +167,34 @@ def test_denied_boarding_one_hour_exception_boundary():
 def test_notice_at_exactly_two_weeks_returns_zero_under_3_3_1():
     result = compute_compensation(
         "3.3.2",
-        {"notice_minutes_before_departure": 14 * 24 * 60, "refund_taken": True},
+        {
+            "notice_minutes_before_departure": 14 * 24 * 60,
+            "alternate_or_refund_offered": True,
+            "refund_taken": True,
+        },
     )
     assert (result.amount, result.reason, result.clause_id) == (
         0,
-        "informed 2+ weeks ahead, 3.3.1",
+        "informed 2+ weeks ahead and alternate/refund arranged, 3.3.1",
         "3.3.1",
     )
+
+
+def test_notice_at_exactly_two_weeks_missing_arrangement_needs_evidence():
+    result = compute_compensation("3.3.2", {"notice_minutes_before_departure": 14 * 24 * 60})
+    assert result.status == "needs_evidence"
+    assert result.missing_fields == ("alternate_or_refund_offered",)
+
+
+def test_notice_at_exactly_two_weeks_without_arrangement_continues_to_3_3_2():
+    result = compute_compensation(
+        "3.3.2",
+        cancellation_inputs(
+            notice_minutes_before_departure=14 * 24 * 60,
+            alternate_or_refund_offered=False,
+        ),
+    )
+    assert (result.amount, result.clause_id) == (5000, "3.3.2(a)")
 
 
 def test_notice_just_under_two_weeks_requires_offer_evidence():
@@ -185,6 +235,17 @@ def test_notice_at_exactly_24_hours_requires_3_3_1_offer():
     assert (not_offered.amount, not_offered.clause_id) == (5000, "3.3.2(a)")
 
 
+def test_notice_at_exactly_two_weeks_offered_returns_zero_under_3_3_1():
+    result = compute_compensation(
+        "3.3.2",
+        cancellation_inputs(
+            notice_minutes_before_departure=14 * 24 * 60,
+            alternate_or_refund_offered=True,
+        ),
+    )
+    assert (result.amount, result.clause_id) == (0, "3.3.1")
+
+
 def test_notice_just_under_24_hours_uses_3_3_2_without_offer_fact():
     result = compute_compensation(
         "3.3.2",
@@ -200,6 +261,7 @@ def test_notice_just_under_24_hours_uses_3_3_2_without_offer_fact():
         (24 * 60 - 1, "alternate_flight_accepted"),
         (24 * 60, "alternate_or_refund_offered"),
         (14 * 24 * 60 - 1, "alternate_or_refund_offered"),
+        (14 * 24 * 60, "alternate_or_refund_offered"),
     ],
 )
 def test_missing_notice_band_fact_never_computes_a_payout(notice: int, missing_field: str):

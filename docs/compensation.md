@@ -21,19 +21,35 @@ presented as a completed claim determination.
 
 The current `ClaimIn`/web form captures `ticket_fare_inr` and a nested `alternate`
 object. It does not capture the separate one-way basic fare and fuel charge needed by
-3.3.2/3.2.2, `refund_taken`, or downgrade sector, distance, and ticket cost including
-taxes. An adapter must map `alternate.accepted` to `alternate_flight_accepted` and
-collect those missing values explicitly. Do not derive basic fare/fuel from the total
-ticket fare, since it also may include taxes and fees. Until these facts are collected,
-the calculator must return `needs_evidence` for the missing fields.
+3.3.2/3.2.2, cancellation notice/offer/refund facts, the passenger's denied-boarding
+choice and alternate departure delay, or downgrade sector, distance, and ticket cost
+including taxes. Do not derive basic fare/fuel from the total ticket fare, since it
+also may include taxes and fees. Until each required fact is collected explicitly,
+the calculator returns `needs_evidence` for the missing fields.
+
+### Calculator input keys
+
+| Input key | Meaning | Used by |
+| --- | --- | --- |
+| `notice_minutes_before_departure` | Minutes between cancellation notice and scheduled departure | Cancellation |
+| `alternate_or_refund_offered` | Whether the airline arranged/offered an alternate flight or refund acceptable to the passenger | Cancellation under 3.3.1 |
+| `alternate_flight_accepted` | Whether the passenger accepted the offered alternate flight | Cancellation under 3.3.2 |
+| `refund_taken` | Whether the passenger took the separate refund; it does not suppress compensation | Cancellation |
+| `alternate_arranged` | Whether the airline arranged a denied-boarding alternate | Denied boarding |
+| `alternate_declined` | Whether the passenger explicitly declined the alternate; required when no alternate was arranged to distinguish airline action from passenger choice | Denied boarding |
+| `alternate_departure_delay_minutes` | Scheduled delay of the alternate from the original departure time | Denied boarding, including declined-alternate one-hour exception |
+| `block_time_minutes` | Scheduled flight block time in minutes | Cancellation tier |
+| `one_way_basic_fare_inr` / `airline_fuel_charge_inr` | Separate booked basic fare and airline fuel charge | Cancellation / denied boarding |
+| `sector`, `distance_km`, `ticket_cost_including_taxes_inr` | Sector and ticket facts needed to calculate downgrade reimbursement | Downgrading |
 
 ## Cancellation — CAR 3.3.2
 
 Compensation under 3.3.2 applies when the passenger was not informed as required by
 3.3.1. The notice bands are handled explicitly:
 
-- At least 14 days (20,160 minutes): return zero with reason
-  `informed 2+ weeks ahead, 3.3.1`.
+- At least 14 days (20,160 minutes): require `alternate_or_refund_offered` as well
+  as the notice fact; missing evidence returns `needs_evidence`, true returns zero
+  under 3.3.1, and false continues to the applicable 3.3.2 logic.
 - Less than 14 days and at least 24 hours (1,440 minutes): require
   `alternate_or_refund_offered`; if true, return zero under 3.3.1. If false, continue
   to 3.3.2, still requiring `alternate_flight_accepted` to be known.
@@ -62,12 +78,14 @@ original and connecting flight facts.
 | Scheduled to depart within 1 hour (60 minutes) of original departure | No compensation | 3.2.2 |
 | More than 1 hour and within 24 hours (up to and including 1,440 minutes) | Lesser of 200% of (booked one-way basic fare + airline fuel charge) or INR 10,000 | 3.2.2(a) |
 | More than 24 hours (over 1,440 minutes) | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000 | 3.2.2(b) |
-| Passenger declines the alternate flight (`alternate_declined=true`) | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000, plus full ticket refund | 3.2.2(c) |
+| Passenger declines an alternate scheduled more than 1 hour after original departure (`alternate_declined=true`) | Lesser of 400% of (booked one-way basic fare + airline fuel charge) or INR 20,000, plus full ticket refund | 3.2.2(c) |
 
 Clause (c) is selected from the passenger's explicit choice, not merely because the
 airline did not arrange an alternate. If there is no arrangement and no explicit
-passenger choice, the calculator requests evidence. The ticket refund in (c) is not
-included in `amount`.
+passenger choice, the calculator requests `alternate_declined`. When an alternate was
+arranged but declined, its scheduled departure delay is still required: at or below
+60 minutes the one-hour exception returns zero, and only a delay above 60 minutes
+can reach 3.2.2(c). The ticket refund in (c) is not included in `amount`.
 
 ## Downgrading — CAR 3.5.1
 
