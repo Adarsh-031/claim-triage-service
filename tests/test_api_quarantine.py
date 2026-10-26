@@ -115,13 +115,15 @@ def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
     monkeypatch.setattr(api, "r", fake_redis)
     monkeypatch.setattr(worker, "cache_redis", fake_redis)
     monkeypatch.setattr(worker, "get_run", lambda _run_id: stored[0])
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, **_kwargs: 1)
 
-    def update_run(run_id, **fields):
-        run = next(item for item in stored if getattr(item, "id", None) == run_id)
+    def finish_run(_run_id, _attempt, **fields):
         for name, value in fields.items():
-            setattr(run, name, value)
+            setattr(stored[0], name, value)
+        return True
 
-    monkeypatch.setattr(worker, "update_run", update_run)
+    monkeypatch.setattr(worker, "finish_run", finish_run)
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         worker,
         "run_agent",
@@ -147,7 +149,7 @@ def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
 
     first = api.submit_claim(claim, request())
     job = json.loads(fake_redis.lpush_calls[0][1])
-    worker.handle(job)
+    assert worker.handle(job) is True
     second = api.submit_claim(claim, request())
 
     assert first.status is api.RunStatus.queued
@@ -166,10 +168,12 @@ def test_worker_does_not_cache_provider_failures(monkeypatch):
 
     fake_redis = FakeRedis()
     stored = SimpleNamespace(claim=demo_claim())
-    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(worker.settings, "cache_enabled", True)
     monkeypatch.setattr(worker, "cache_redis", fake_redis)
     monkeypatch.setattr(worker, "get_run", lambda _run_id: stored)
-    monkeypatch.setattr(worker, "update_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, **_kwargs: 1)
+    monkeypatch.setattr(worker, "finish_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         worker,
         "run_agent",
@@ -185,7 +189,7 @@ def test_worker_does_not_cache_provider_failures(monkeypatch):
         ),
     )
 
-    worker.handle({"run_id": str(uuid.uuid4()), "client_id": "127.0.0.1"})
+    assert worker.handle({"run_id": str(uuid.uuid4()), "client_id": "127.0.0.1"}) is True
 
     assert not any(key.startswith("triage:cache:run:") for key in fake_redis.values)
 
