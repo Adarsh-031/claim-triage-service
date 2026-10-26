@@ -150,9 +150,13 @@ def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
         chunks = _normalize_chroma(ids, docs, metas)
+        distance_by_id = {
+            chunk_id: distance for chunk_id, distance in zip(ids, distances, strict=False)
+        }
         vector_rank = {}
         by_id = {}
-        for rank, (chunk, distance) in enumerate(zip(chunks, distances, strict=False), start=1):
+        for chunk in chunks:
+            distance = distance_by_id.get(chunk["chunk_id"])
             chunk["score"] = round(1.0 - float(distance), 6) if distance is not None else 0.0
             if chunk["score"] >= MIN_VECTOR_SIMILARITY:
                 vector_rank[chunk["chunk_id"]] = rank
