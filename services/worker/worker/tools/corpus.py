@@ -166,7 +166,7 @@ def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
                 chunk_id,
             ),
         )
-        return [by_id[chunk_id] for chunk_id in ranked_ids[:k]
+        return [by_id[chunk_id] for chunk_id in ranked_ids[:k]]
     except Exception:
         _reset_vector_backend()
         raise
