@@ -185,12 +185,29 @@ def test_terminal_step_reservation_skips_node_side_effects():
     assert out["step_count"] == 12 and out["budget_exceeded"] is True
 
 
+def _mock_worker_store(monkeypatch):
+    updates = []
+    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+
+    def claim(run_id, *, now):
+        updates.append((run_id, {"status": RunStatus.running.value}))
+        return 1
+
+    def finish(run_id, attempt, **update):
+        assert attempt == 1
+        updates.append((run_id, update))
+        return True
+
+    monkeypatch.setattr(worker_main, "claim_run", claim)
+    monkeypatch.setattr(worker_main, "finish_run", finish)
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *args, **kwargs: True)
+    return updates
+
+
 @pytest.mark.parametrize("budget_exhausted", [False, True])
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
-    updates = []
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
+    updates = _mock_worker_store(monkeypatch)
     original = graph.run_agent
 
     def checked(claim, correlation_id, *, run_id):
@@ -201,8 +218,9 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     monkeypatch.setattr(worker_main, "run_agent", checked)
     if budget_exhausted:
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
-    worker_main.handle({"run_id": str(run_id), "cid": "worker-test"})
+    assert worker_main.handle({"run_id": str(run_id), "cid": "worker-test"}) is True
     assert updates[0] == (run_id, {"status": RunStatus.running.value})
+    assert updates[-1][0] == run_id
     final = updates[-1][1]
     rec = Recommendation.model_validate(final["result"])
     assert final["status"] == "escalated"
@@ -219,11 +237,9 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
         return {**original(state), "route": route, "summary": "Unverified decision", "amount": 1000}
 
     monkeypatch.setattr(graph, "make_draft", consequential)
-    updates = []
-    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
-    monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append(update))
-    worker_main.handle({"run_id": str(uuid4())})
-    saved = updates[-1]
+    updates = _mock_worker_store(monkeypatch)
+    assert worker_main.handle({"run_id": str(uuid4())}) is True
+    saved = updates[-1][1]
     rec = Recommendation.model_validate(saved["result"])
     assert saved["status"] == "escalated"
     assert rec.escalation_reason is EscalationReason.VERIFICATION_FAILED

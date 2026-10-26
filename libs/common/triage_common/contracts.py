@@ -233,16 +233,28 @@ class Recommendation(BaseModel):
 class RunStatus(StrEnum):
     queued = "queued"
     running = "running"
-    completed = "completed"
+    done = "done"
+    completed = "completed"  # Legacy status value accepted during rollout.
     escalated = "escalated"
     failed = "failed"
+
+
+TERMINAL_STATUSES = frozenset({
+    RunStatus.done.value,
+    RunStatus.completed.value,
+    RunStatus.escalated.value,
+    RunStatus.failed.value,
+})
 
 
 class RunOut(BaseModel):
     run_id: UUID
     status: RunStatus
+    terminal: bool = False
     created_at: datetime
     updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     result: Recommendation | None = None
     error: str | None = None
 
