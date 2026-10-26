@@ -62,7 +62,7 @@ def test_calculator_uses_claim_inputs_and_never_total_ticket_fare():
     claim["alternate"]["accepted"] = True
     result = execute_tool("compute_compensation", {"clause_id": "3.3.2"}, claim)
     assert result["status"] == "computed" and result["amount"] == 0
-    assert result["formula"] == "alternate accepted, 3.3.2"
+    assert result["reason"] == "alternate accepted, 3.3.2"
     with pytest.raises(ValueError):
         execute_tool("compute_compensation", {"clause_id": "3.3.2", "inputs": {"amount": 50000}}, claim)
 
@@ -73,7 +73,7 @@ def test_cancellation_adapter_caps_and_boundaries(block, cap, clause, basic):
     inputs = {"notice_minutes_before_departure": 90, "alternate_flight_accepted": False,
               "contact_info_provided": True, "block_time_minutes": block,
               "one_way_basic_fare_inr": basic, "airline_fuel_charge_inr": 100}
-    result = compute_compensation("3.3.2", inputs)
+    result = compute_compensation("3.3.2", inputs).to_dict()
     assert result["amount"] == min(cap, basic + 100)
     assert result["clause_id"] == f"3.3.2({clause})"
 
@@ -82,8 +82,8 @@ def test_cancellation_adapter_caps_and_boundaries(block, cap, clause, basic):
 def test_timely_notice_needs_acceptable_arrangement(notice):
     inputs = {"notice_minutes_before_departure": notice, "alternate_flight_accepted": False,
               "contact_info_provided": True}
-    assert compute_compensation("3.3.2", inputs)["missing_fields"] == ["alternate_or_refund_offered"]
-    result = compute_compensation("3.3.2", {**inputs, "alternate_or_refund_offered": True})
+    assert compute_compensation("3.3.2", inputs).to_dict()["missing_fields"] == ["alternate_or_refund_offered"]
+    result = compute_compensation("3.3.2", {**inputs, "alternate_or_refund_offered": True}).to_dict()
     assert result["amount"] == 0 and result["clause_id"] == "3.3.1"
 
 
