@@ -28,6 +28,7 @@ class Run(Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Counts successful claims, including the initial attempt; used to fence stale workers.
     requeue_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

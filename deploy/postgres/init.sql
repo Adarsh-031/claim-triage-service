@@ -1,4 +1,4 @@
--- Keep this schema aligned with libs/common/triage_common/store.py.
+-- Fresh volumes only. Existing volumes: apply deploy/postgres/migrations/*.sql (see docs/runbooks.md).
 -- Python supplies UUID and timestamp defaults for normal application writes.
 CREATE TABLE IF NOT EXISTS runs (
     id uuid PRIMARY KEY,

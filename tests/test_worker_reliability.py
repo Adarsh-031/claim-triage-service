@@ -290,3 +290,19 @@ def test_consume_once_keeps_entry_when_worker_claim_is_lost(monkeypatch):
     assert worker_main.consume_once(r) is False
     assert r.lists["triage:runs"] == []
     assert r.lists["triage:runs:processing"] == [raw]
+
+
+def test_max_requeues_two_allows_exactly_three_claims_before_failing():
+    now = datetime.now(UTC)
+    run = _run(now, age_s=90, heartbeat_age_s=45, requeues=0)
+    claims = 0
+    outcome = "requeued"
+    while outcome == "requeued":
+        run.status = RunStatus.running.value  # what claim_run does
+        run.requeue_count += 1
+        run.heartbeat_at = now - timedelta(seconds=45)
+        claims += 1
+        outcome = recover_stale_run_state(run, now=now, stale_after_s=30, max_requeues=2)
+    assert claims == 3
+    assert outcome == "failed"
+    assert run.status == RunStatus.failed.value
