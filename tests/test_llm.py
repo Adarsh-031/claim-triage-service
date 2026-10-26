@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 
 import httpx
-import redis
 import pytest
+import redis
 from worker.agent.llm import CircuitBreaker, CircuitOpen, ResilientLLM
 
 

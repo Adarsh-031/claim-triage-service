@@ -1,9 +1,9 @@
 """Provider-agnostic LLM interface (swap by config). Timeouts, retries, circuit breaker (A5)."""
 from __future__ import annotations
 
+import logging
 import random
 import time
-import logging
 from typing import Protocol
 from uuid import uuid4
 
@@ -67,9 +67,7 @@ class CircuitBreaker:
                     self.probe_key, token, nx=True,
                     px=max(1000, int(settings.llm_timeout_s * 1000)),
                 )
-                if not acquired:
-                    state = "open"
-                else:
+                if acquired:
                     self.probe_token = token
                     probe_acquired = True
         except redis.RedisError:
