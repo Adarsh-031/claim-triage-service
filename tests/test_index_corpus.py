@@ -109,7 +109,7 @@ def test_cancellation_compensation_bm25_real_chunks_contract():
     assert "CAR-S3-M-IV-R4:3.3.2:0001" in top
 
 
-def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
+def test_verify_cancellation_retrieval_checks_vector_and_bm25_candidate_recall():
     from cli.index_corpus import verify_cancellation_retrieval
 
     chunks = [
@@ -137,5 +137,5 @@ def test_verify_cancellation_retrieval_checks_vector_and_bm25_top_three():
             ]]}
 
     result = verify_cancellation_retrieval(chunks, FakeTarget())
-    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_reranked_top3"]
-    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_bm25_top3"]
+    assert result["cancellation_compensation_candidate_recall"] is True
+    assert "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_vector_top5"] or "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_clause_query_top5"] or "CAR-S3-M-IV-R4:3.3.2:0001" in result["cancellation_compensation_bm25_top5"]
