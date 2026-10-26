@@ -86,7 +86,7 @@ def cache_get(client, key: str) -> dict[str, Any] | None:
     if isinstance(cached, dict):
         status = cached.get("status")
         result = cached.get("result")
-        if isinstance(status, str) and status in {"completed", "escalated"} and isinstance(result, dict):
+        if isinstance(status, str) and status in {"done", "completed", "escalated"} and isinstance(result, dict):
             try:
                 recommendation = Recommendation.model_validate(result)
                 if (status == "escalated") == (recommendation.route.value == "escalate"):
