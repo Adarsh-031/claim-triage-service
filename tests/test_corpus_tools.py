@@ -99,6 +99,7 @@ def test_vector_search_uses_configured_collection_and_metadata(monkeypatch):
     monkeypatch.setattr(corpus, "_VECTOR_BACKEND", None)
     monkeypatch.setattr(corpus, "DefaultEmbeddingFunction", lambda: object())
     monkeypatch.setattr(corpus.chromadb, "HttpClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(corpus, "_bm25_search", lambda query, k, doc_id: [])
     result = corpus._vector_search("cancellation compensation", 5, "CAR-S3-M-IV-R4")
     assert seen["where"] == {"doc_id": "CAR-S3-M-IV-R4"}
     assert result[0]["clause_id"] == "3.3.2"
