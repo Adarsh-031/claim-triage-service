@@ -5,7 +5,9 @@ import time
 import httpx
 import pytest
 import redis
+from prometheus_client import generate_latest
 from worker.agent.llm import CircuitBreaker, CircuitOpen, ResilientLLM, get_llm
+from worker.metrics import LLM_BREAKER_STATE
 
 
 class FakePipeline:
@@ -92,6 +94,22 @@ def test_breaker_opens_after_threshold_and_rejects_calls(monkeypatch):
     assert breaker.state == "open"
     with pytest.raises(CircuitOpen, match="open"):
         breaker.before()
+
+
+def test_breaker_metric_reads_shared_state_at_scrape_time():
+    client = FakeRedis()
+    breaker = CircuitBreaker(1, 30, 30, client=client, name="scrape-test")
+
+    def metric_value():
+        lines = generate_latest(LLM_BREAKER_STATE).decode().splitlines()
+        sample = next(line for line in lines if 'provider="scrape-test"' in line)
+        return float(sample.rsplit(" ", 1)[1])
+
+    assert metric_value() == 0
+    client.values[breaker.open_key] = str(time.time())
+    assert metric_value() == 1
+    client.values[breaker.open_key] = str(time.time() - 31)
+    assert metric_value() == 2
 
 
 def test_breaker_does_not_reset_open_window_on_later_failure():

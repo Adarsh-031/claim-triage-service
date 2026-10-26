@@ -40,6 +40,7 @@ class CircuitBreaker:
         self.open_key = f"llm:breaker:{name}:opened"
         self.probe_key = f"llm:breaker:{name}:probe"
         self.probe_token = None
+        LLM_BREAKER_STATE.labels(self.name).set_function(self._metric_state)
 
     def _state(self) -> str:
         opened_at = self.client.get(self.open_key)
@@ -57,6 +58,14 @@ class CircuitBreaker:
             log.warning("Redis unavailable while reading %s circuit state; treating breaker as closed", self.name)
             return "closed"
 
+    def _metric_state(self) -> float:
+        try:
+            state = self._state()
+        except redis.RedisError:
+            log.warning("Redis unavailable while scraping %s circuit state", self.name)
+            return 0
+        return float({"closed": 0, "open": 1, "half_open": 2}[state])
+
     def before(self) -> None:
         probe_acquired = False
         try:
@@ -72,9 +81,7 @@ class CircuitBreaker:
                     probe_acquired = True
         except redis.RedisError:
             log.warning("Redis unavailable before %s call; treating breaker as closed", self.name)
-            LLM_BREAKER_STATE.labels(self.name).set(0)
             return
-        LLM_BREAKER_STATE.labels(self.name).set({"closed": 0, "open": 1, "half_open": 2}[state])
         if state == "open":
             raise CircuitOpen("provider circuit open")
         if state == "half_open" and not probe_acquired:
@@ -87,7 +94,6 @@ class CircuitBreaker:
             log.warning("Redis unavailable after successful %s call; breaker state may be stale", self.name)
         finally:
             self._release_probe()
-        LLM_BREAKER_STATE.labels(self.name).set(0)
 
     def failure(self) -> None:
         try:
@@ -107,8 +113,6 @@ class CircuitBreaker:
             log.warning("Redis unavailable after failed %s call; treating breaker as closed", self.name)
         finally:
             self._release_probe()
-        state = self.state
-        LLM_BREAKER_STATE.labels(self.name).set({"closed": 0, "open": 1, "half_open": 2}[state])
 
     def _release_probe(self) -> None:
         if self.probe_token:
