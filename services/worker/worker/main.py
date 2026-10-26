@@ -39,7 +39,14 @@ def _handle(job: dict) -> None:
     RUNS_STARTED.inc()
     update_run(run_id, status=RunStatus.running.value)
     try:
-        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id))
+        claim = dict(run.claim)
+        prompt_version = job.get("prompt_version") or claim.pop("prompt_version", "v1")
+        result, trace = run_agent(
+            claim,
+            correlation_id=job.get("cid", ""),
+            run_id=str(run_id),
+            prompt_version=prompt_version,
+        )
         # Preserve the API/store contract while the graph emits the stable Result.
         rec = Recommendation(
             route=result.route, summary=result.summary, compensation_inr=result.amount,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 
@@ -111,12 +112,17 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
 
 @app.post("/v1/claims", response_model=SubmitOut, status_code=202)
 def submit_claim(claim: ClaimIn, request: Request):
+    prompt_version = request.headers.get("x-prompt-version", "v1")
+    if not re.fullmatch(r"v[12]", prompt_version):
+        raise HTTPException(400, "x-prompt-version must be 'v1' or 'v2'")
     with SUBMIT_LATENCY.time():
         client = request.client.host if request.client else "unknown"
         if _rate_limited(client):
             raise HTTPException(429, "rate limit exceeded")
         with SessionLocal() as s, s.begin():
-            run = Run(claim=claim.model_dump(mode="json"), status=RunStatus.queued.value)
+            run_claim = claim.model_dump(mode="json")
+            run_claim["prompt_version"] = prompt_version
+            run = Run(claim=run_claim, status=RunStatus.queued.value)
             s.add(run)
             s.flush()
             run_id = run.id
@@ -125,7 +131,8 @@ def submit_claim(claim: ClaimIn, request: Request):
                                  "messaging.system": "redis", "messaging.destination.name": settings.queue_name})
             carrier = {}
             inject(carrier)
-            r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
+        r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
+                                               "prompt_version": prompt_version,
                                                    "trace_context": carrier}))
         CLAIMS.inc()
         return SubmitOut(run_id=run_id, status=RunStatus.queued, poll_url=f"/v1/runs/{run_id}")

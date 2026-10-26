@@ -38,6 +38,17 @@ def test_s01_returns_valid_cited_result_and_ordered_trace():
     assert trace[-2]["verified"] is False
 
 
+@pytest.mark.parametrize("prompt_version", ["v1", "v2"])
+def test_run_agent_preserves_requested_prompt_version(prompt_version):
+    result, _ = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
+    assert result.prompt_version == prompt_version
+
+
+def test_run_agent_rejects_unknown_prompt_version():
+    with pytest.raises(ValueError, match="prompt_version"):
+        graph.run_agent(SCENARIO["claim"], prompt_version="v3")
+
+
 @pytest.mark.parametrize("budget", ["steps", "tools"])
 def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
     calls = []
@@ -116,8 +127,8 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     monkeypatch.setattr(worker_main, "update_run", lambda rid, **update: updates.append((rid, update)))
     original_run_agent = graph.run_agent
 
-    def checked_run_agent(claim, correlation_id, *, run_id):
-        result, trace = original_run_agent(claim, correlation_id, run_id=run_id)
+    def checked_run_agent(claim, correlation_id, *, run_id, prompt_version="v1"):
+        result, trace = original_run_agent(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
         assert str(result.run_id) == run_id
         return result, trace
 

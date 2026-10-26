@@ -18,7 +18,7 @@ from triage_common.settings import settings
 from ..metrics import NODE_LATENCY
 from ..tools.corpus import DEMO_CORPUS_VERSION, search_corpus
 
-PROMPT_VERSION = "skeleton-v1"
+PROMPT_VERSION = "v1"
 
 
 def _log(state: RunState, step: str, **detail: object) -> None:
@@ -173,9 +173,17 @@ def build_graph():
 GRAPH = build_graph()
 
 
-def run_agent(claim: dict, correlation_id: str = "", *, run_id: str | None = None) -> tuple[Result, list[dict]]:
+def run_agent(
+    claim: dict,
+    correlation_id: str = "",
+    *,
+    run_id: str | None = None,
+    prompt_version: str = "v1",
+) -> tuple[Result, list[dict]]:
+    if prompt_version not in {"v1", "v2"}:
+        raise ValueError("prompt_version must be 'v1' or 'v2'")
     out = GRAPH.invoke(
-        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
+        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
          "corpus_version": DEMO_CORPUS_VERSION, "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's

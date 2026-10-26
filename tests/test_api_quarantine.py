@@ -245,10 +245,12 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     response = client.post("/v1/claims", json=demo_claim(), headers={
         "traceparent": "00-12345678901234567890123456789012-1234567890123456-01",
         "x-correlation-id": "trace-test",
+        "x-prompt-version": "v2",
     })
     assert response.status_code == 202
     job = json.loads(fake_redis.lpush_calls[0][1])
     assert "traceparent" in job["trace_context"]
+    assert job["prompt_version"] == "v2"
     worker.handle(job)
     spans = exporter.get_finished_spans()
     publish = next(span for span in spans if span.name == "queue.publish")
@@ -260,6 +262,7 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     for name in ["agent.intake", "agent.research", "agent.verify", "agent.finalize", "tool.search_corpus"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
     assert updates[-1]["status"] == "escalated"
+    assert updates[-1]["result"]["prompt_version"] == "v2"
     assert "pnr" not in str([dict(s.attributes) for s in spans])
 
     def fail(*args, **kwargs):
@@ -271,3 +274,8 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     assert failed_span.status.status_code == trace.StatusCode.ERROR
     assert any(event.name == "exception" for event in failed_span.events)
     assert updates[-1]["result"]["escalation_reason"] == "PROVIDER_DEGRADED"
+
+
+def test_submit_rejects_unknown_prompt_version():
+    response = client.post("/v1/claims", json=demo_claim(), headers={"x-prompt-version": "v3"})
+    assert response.status_code == 400
