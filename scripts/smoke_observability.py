@@ -6,9 +6,9 @@ import json
 import time
 from pathlib import Path
 from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from triage_common.contracts import TERMINAL_STATUSES
-from urllib.request import Request, urlopen
 
 
 def fetch(url: str, body: dict | None = None):

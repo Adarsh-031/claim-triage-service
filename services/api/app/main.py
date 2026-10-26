@@ -17,13 +17,13 @@ from opentelemetry.trace import SpanKind
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import text
 from triage_common.contracts import (
+    TERMINAL_STATUSES,
     ClaimIn,
     FeedbackIn,
     Recommendation,
     RunOut,
     RunStatus,
     SubmitOut,
-    TERMINAL_STATUSES,
 )
 from triage_common.settings import settings
 from triage_common.store import (

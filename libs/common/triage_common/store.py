@@ -4,10 +4,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select, update as sa_update
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from .contracts import EscalationReason, Recommendation, Route, TERMINAL_STATUSES
+from .contracts import TERMINAL_STATUSES, EscalationReason, Recommendation, Route
 from .settings import settings
 
 
