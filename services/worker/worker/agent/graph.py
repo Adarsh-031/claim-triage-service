@@ -11,9 +11,11 @@ from functools import wraps
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
+from opentelemetry import trace
 from triage_common.contracts import Citation, EscalationReason, Result, Route, RunState
 from triage_common.settings import settings
 
+from ..metrics import NODE_LATENCY
 from ..tools.corpus import DEMO_CORPUS_VERSION, search_corpus
 
 PROMPT_VERSION = "skeleton-v1"
@@ -44,7 +46,9 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
             return state
         state["step_count"] = state.get("step_count", 0) + 1
         if not _budget_exceeded(state):
-            state = node(state)
+            with trace.get_tracer(__name__).start_as_current_span(f"agent.{node.__name__}"), \
+                    NODE_LATENCY.labels(node.__name__).time():
+                state = node(state)
         _budget_exceeded(state)
         return state
 
@@ -87,7 +91,8 @@ def _reserve_tool_call(state: RunState) -> bool:
 def research(state: RunState) -> RunState:
     if not _reserve_tool_call(state):
         return state
-    state["retrieved"] = search_corpus(str(state["facts"]["disruption_type"]))
+    with trace.get_tracer(__name__).start_as_current_span("tool.search_corpus"):
+        state["retrieved"] = search_corpus(str(state["facts"]["disruption_type"]))
     # Do not start drafting if the search consumed the remaining time/tool budget.
     if not _budget_exceeded(state):
         state["draft"] = _stub_draft(state)
@@ -144,11 +149,17 @@ def finalize(state: RunState) -> RunState:
     return state
 
 
+def traced_finalize(state: RunState) -> RunState:
+    with trace.get_tracer(__name__).start_as_current_span("agent.finalize"), \
+            NODE_LATENCY.labels("finalize").time():
+        return finalize(state)
+
+
 def build_graph():
     g = StateGraph(RunState)
     for name, fn in [("intake", intake), ("research", research), ("verify", verify)]:
         g.add_node(name, _bounded(fn))
-    g.add_node("finalize", finalize)
+    g.add_node("finalize", traced_finalize)
     g.set_entry_point("intake")
     g.add_conditional_edges("intake", lambda s: "finalize" if s.get("budget_exceeded") else "research",
                             {"finalize": "finalize", "research": "research"})

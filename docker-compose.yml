@@ -80,10 +80,11 @@ services:
     <<: *app-env
     volumes:
       - ./corpus:/src/corpus
+      - embedding_cache:/root/.cache/chroma
     depends_on:
       postgres: { condition: service_healthy }
       chroma: { condition: service_healthy }
-    command: ["sh", "-c", "python scripts/fetch_corpus.py && python cli/ingest.py"]
+    command: ["sh", "-c", "python scripts/fetch_corpus.py && python cli/ingest.py && python cli/index_corpus.py && python cli/index_corpus.py --verify"]
     restart: "no"
 
   chroma:
@@ -110,6 +111,8 @@ services:
 
   jaeger:
     image: jaegertracing/all-in-one:1.60.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
     ports: ["16686:16686"]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:14269/"]
@@ -150,3 +153,4 @@ services:
 volumes:
   pgdata:
   chroma:
+  embedding_cache:

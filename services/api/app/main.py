@@ -10,6 +10,10 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import text
 from triage_common.contracts import (
@@ -31,6 +35,7 @@ from triage_common.store import (
     init_db,
     list_quarantine,
 )
+from triage_common.telemetry import configure_tracing
 
 app = FastAPI(title="Claim Triage Service", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -44,7 +49,14 @@ SUBMIT_LATENCY = Histogram("submit_latency_seconds", "Latency of POST /v1/claims
 
 @app.on_event("startup")
 def _startup() -> None:
+    app.state.tracing = configure_tracing("triage-api")
     init_db()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    if provider := getattr(app.state, "tracing", None):
+        provider.shutdown()
 
 
 @app.middleware("http")
@@ -108,7 +120,13 @@ def submit_claim(claim: ClaimIn, request: Request):
             s.add(run)
             s.flush()
             run_id = run.id
-        r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid}))
+        with trace.get_tracer(__name__).start_as_current_span("queue.publish", kind=SpanKind.PRODUCER) as span:
+            span.set_attributes({"run_id": str(run_id), "correlation_id": request.state.cid,
+                                 "messaging.system": "redis", "messaging.destination.name": settings.queue_name})
+            carrier = {}
+            inject(carrier)
+            r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
+                                                   "trace_context": carrier}))
         CLAIMS.inc()
         return SubmitOut(run_id=run_id, status=RunStatus.queued, poll_url=f"/v1/runs/{run_id}")
 
@@ -173,3 +191,6 @@ def readyz():
 @app.get("/metrics")
 def metrics():
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+FastAPIInstrumentor.instrument_app(app, excluded_urls="healthz,readyz,metrics")
