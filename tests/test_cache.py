@@ -37,7 +37,9 @@ def test_only_verified_or_allowlisted_deterministic_results_are_cached():
     assert cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "OUT_OF_CORPUS"})
     assert not cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "PROVIDER_DEGRADED"})
     assert not cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "NEW_REASON"})
+    assert not cacheable_result({"verified": True, "route": "escalate", "escalation_reason": "NEW_REASON"})
     assert not cacheable_result({"verified": False, "route": "pay_as_computed"})
+    assert not cacheable_result({"verified": True, "route": "NEW_ROUTE"})
 
 
 def test_cache_get_and_set_serialize_json():

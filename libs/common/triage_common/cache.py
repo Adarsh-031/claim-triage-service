@@ -90,16 +90,14 @@ CACHEABLE_ESCALATION_REASONS = frozenset({
     "VERIFICATION_FAILED",
     "GUARDRAIL_BLOCKED",
 })
+CACHEABLE_VERIFIED_ROUTES = frozenset({"pay_as_computed", "request_further_evidence", "decline"})
 
 
 def cacheable_result(result: dict[str, Any]) -> bool:
     """Cache verified results or known deterministic escalations only."""
-    if result.get("verified") is True:
-        return True
-    return (
-        result.get("route") == "escalate"
-        and result.get("escalation_reason") in CACHEABLE_ESCALATION_REASONS
-    )
+    if result.get("route") == "escalate":
+        return result.get("escalation_reason") in CACHEABLE_ESCALATION_REASONS
+    return result.get("route") in CACHEABLE_VERIFIED_ROUTES and result.get("verified") is True
 
 
 def allow_run(client, client_id: str, limit: int) -> tuple[bool, int]:
