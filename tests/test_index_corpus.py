@@ -49,7 +49,9 @@ def test_sync_idempotent_updates_metadata_and_prunes_stale(target):
         "count": 2, "upserted": 0, "deleted": 0, "embedding_cache_hits": 0
     }
     first.page = 7  # Provenance changes also invalidate the cached record.
-    assert sync([first], target) == {"count": 1, "upserted": 1, "deleted": 1}
+    assert sync([first], target) == {
+        "count": 1, "upserted": 1, "deleted": 1, "embedding_cache_hits": 1
+    }
     assert verify([first], target)["count"] == 1
     forced = sync([first], target, force=True)
     assert forced["upserted"] == 1
