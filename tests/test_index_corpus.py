@@ -5,7 +5,7 @@ import pytest
 from chromadb.api.types import EmbeddingFunction
 from triage_common.contracts import Chunk
 
-from cli.index_corpus import INDEX_VERSION, MODEL, load_chunks, sync, validate_collection, verify
+from cli.index_corpus import INDEX_VERSION, MODEL, load_chunks, record, sync, validate_collection, verify
 
 
 class OfflineEmbedding(EmbeddingFunction):
@@ -69,6 +69,22 @@ def test_sync_reuses_embedding_when_metadata_changes_for_same_chunk_hash(target)
     result = sync([updated], target)
     assert result["embedding_cache_hits"] == 1
     assert target.get(ids=[updated.chunk_id], include=["metadatas"])["metadatas"][0]["page"] == 9
+
+
+def test_sync_upgrades_legacy_index_metadata_once(target):
+    first = chunk()
+    document, metadata = record(first)
+    metadata.pop("embedding_hash")
+    metadata["fingerprint"] = hashlib.sha256(first.model_dump_json().encode()).hexdigest()
+    target.upsert(ids=[first.chunk_id], documents=[document], metadatas=[metadata])
+
+    result = sync([first], target)
+
+    assert result["upserted"] == 1
+    assert result["embedding_cache_hits"] == 0
+    stored = target.get(ids=[first.chunk_id], include=["metadatas"])["metadatas"][0]
+    assert stored["embedding_hash"] == record(first)[1]["embedding_hash"]
+    assert verify([first], target)["count"] == 1
 
 
 def test_incompatible_collection_is_rejected(target):

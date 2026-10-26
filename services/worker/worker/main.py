@@ -10,7 +10,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
-from triage_common.cache import cache_get, cache_set, current_corpus_version, run_cache_key
+from triage_common.cache import cache_get, cache_set, cacheable_result, current_corpus_version, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
 from triage_common.settings import settings
 from triage_common.store import get_run, init_db, update_run
@@ -42,9 +42,8 @@ def _handle(job: dict) -> None:
     update_run(run_id, status=RunStatus.running.value)
     try:
         claim = dict(run.claim)
-        stored_prompt_version = claim.pop("prompt_version", settings.prompt_version)
-        client_scope = claim.pop("client_id", "unknown")
-        prompt_version = job.get("prompt_version") or stored_prompt_version
+        client_scope = job.get("client_id", "unknown")
+        prompt_version = job.get("prompt_version", settings.prompt_version)
         corpus_version = current_corpus_version(cache_redis)
         cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
         if settings.cache_enabled:
@@ -80,11 +79,7 @@ def _handle(job: dict) -> None:
         trace = [{"step": "error", "detail": str(e)}]
     status = RunStatus.escalated if rec.route == Route.escalate else RunStatus.completed
     update_run(run_id, status=status.value, result=rec.model_dump(mode="json"), trace=trace)
-    if settings.cache_enabled and rec.escalation_reason not in {
-        EscalationReason.PROVIDER_DEGRADED,
-        EscalationReason.WORKER_FAILURE,
-        EscalationReason.BUDGET_EXCEEDED,
-    }:
+    if settings.cache_enabled and cacheable_result(rec.model_dump(mode="json")):
         cache_set(cache_redis, cache_key, {"status": status.value, "result": rec.model_dump(mode="json")},
                   settings.cache_ttl_s)
     reason = rec.escalation_reason.value if rec.escalation_reason else "none"

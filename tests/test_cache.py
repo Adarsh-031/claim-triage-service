@@ -1,6 +1,13 @@
 import json
 
-from triage_common.cache import allow_run, cache_get, cache_set, retrieval_cache_key, run_cache_key
+from triage_common.cache import (
+    RUN_CACHE_VERSION,
+    allow_run,
+    cache_get,
+    cache_set,
+    cacheable_result,
+    run_cache_key,
+)
 
 
 def test_run_cache_key_normalizes_statement_and_includes_versions():
@@ -14,12 +21,23 @@ def test_run_cache_key_normalizes_statement_and_includes_versions():
     )
 
 
-def test_retrieval_cache_key_covers_query_mode_k_and_corpus():
-    base = retrieval_cache_key(" Meals  & refreshment ", "semantic", 5, "corpus-a")
-    assert base == retrieval_cache_key("meals & refreshment", "semantic", 5, "corpus-a")
-    assert base != retrieval_cache_key("meals & refreshment", "keyword", 5, "corpus-a")
-    assert base != retrieval_cache_key("meals & refreshment", "semantic", 3, "corpus-a")
-    assert base != retrieval_cache_key("meals & refreshment", "semantic", 5, "corpus-b")
+def test_run_cache_key_ignores_claim_metadata_and_includes_graph_version(monkeypatch):
+    import triage_common.cache as cache
+
+    claim = {"pnr": "ABC123", "statement": "cancelled"}
+    with_metadata = {**claim, "client_id": "ignored", "prompt_version": "ignored"}
+    base = run_cache_key(claim, "v1", "corpus-a", "client-a")
+    assert base == run_cache_key(with_metadata, "v1", "corpus-a", "client-a")
+    monkeypatch.setattr(cache, "RUN_CACHE_VERSION", f"{RUN_CACHE_VERSION}-next")
+    assert base != run_cache_key(claim, "v1", "corpus-a", "client-a")
+
+
+def test_only_verified_or_allowlisted_deterministic_results_are_cached():
+    assert cacheable_result({"verified": True, "route": "pay_as_computed"})
+    assert cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "OUT_OF_CORPUS"})
+    assert not cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "PROVIDER_DEGRADED"})
+    assert not cacheable_result({"verified": False, "route": "escalate", "escalation_reason": "NEW_REASON"})
+    assert not cacheable_result({"verified": False, "route": "pay_as_computed"})
 
 
 def test_cache_get_and_set_serialize_json():

@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+import redis
 from app import main as api
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -69,7 +71,7 @@ def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
     stored = []
     fake_redis = FakeRedis()
     claim_data = demo_claim()
-    client_id = "cache-test-client"
+    client_id = "127.0.0.1"
     prompt_version = "v1"
     cached_result = {
         "route": "escalate",
@@ -82,14 +84,14 @@ def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
         "requires_human_approval": True,
     }
     normalized_claim = api.ClaimIn.model_validate(claim_data).model_dump(mode="json")
-    key = api.run_cache_key({**normalized_claim, "prompt_version": prompt_version, "client_id": client_id},
-                            prompt_version, api.current_corpus_version(fake_redis), client_id)
+    key = api.run_cache_key(normalized_claim, prompt_version,
+                            api.current_corpus_version(fake_redis), client_id)
     fake_redis.set(key, json.dumps({"status": "escalated", "result": cached_result}), ex=300)
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", fake_redis)
     request = Request({
         "type": "http", "method": "POST", "path": "/v1/claims",
-        "headers": [(b"x-client-id", client_id.encode())],
+        "headers": [(b"x-client-id", b"forged-other-client")],
         "client": ("127.0.0.1", 12345), "state": {"cid": "cache-test"},
     })
 
@@ -100,6 +102,62 @@ def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
     assert stored[0].result == cached_result
     assert stored[0].trace[0]["hit"] is True
     assert fake_redis.lpush_calls == []
+
+
+def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
+    from triage_common.contracts import EscalationReason, Route
+    from worker import main as worker
+
+    stored = []
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    monkeypatch.setattr(worker, "cache_redis", fake_redis)
+    monkeypatch.setattr(worker, "get_run", lambda _run_id: stored[0])
+
+    def update_run(run_id, **fields):
+        run = next(item for item in stored if getattr(item, "id", None) == run_id)
+        for name, value in fields.items():
+            setattr(run, name, value)
+
+    monkeypatch.setattr(worker, "update_run", update_run)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                route=Route.ESCALATE,
+                summary="Needs officer review",
+                amount=None,
+                citations=[],
+                escalation_reason=EscalationReason.VERIFICATION_FAILED,
+            ),
+            [{"step": "finalize"}],
+        ),
+    )
+
+    claim = api.ClaimIn.model_validate(demo_claim())
+
+    def request():
+        return Request({
+            "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+            "client": ("127.0.0.1", 12345), "state": {"cid": "cache-roundtrip"},
+        })
+
+    first = api.submit_claim(claim, request())
+    job = json.loads(fake_redis.lpush_calls[0][1])
+    worker.handle(job)
+    second = api.submit_claim(claim, request())
+
+    assert first.status is api.RunStatus.queued
+    assert second.status is api.RunStatus.escalated
+    assert len(fake_redis.lpush_calls) == 1
+    assert len(stored) == 2
+    assert stored[0].claim == api.ClaimIn.model_validate(demo_claim()).model_dump(mode="json")
+    assert "client_id" not in stored[0].claim
+    assert "prompt_version" not in stored[0].claim
+    assert stored[1].trace[0]["hit"] is True
 
 
 def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
@@ -125,7 +183,7 @@ def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     quarantine = stored[0]
     assert isinstance(quarantine, api.Quarantine)
     assert json.loads(quarantine.raw_body)["statement"] == claim["statement"]
-    assert quarantine.client_id == "quarantine-test-client"
+    assert quarantine.client_id == "testclient"
     assert len(quarantine.raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
     assert fake_redis.eval_calls == 1
     assert fake_redis.lpush_calls == []
@@ -182,9 +240,14 @@ def test_valid_claim_still_queues_unchanged(monkeypatch):
     assert body["run_id"]
     assert len(stored) == 1
     assert isinstance(stored[0], api.Run)
+    assert "client_id" not in stored[0].claim
+    assert "prompt_version" not in stored[0].claim
     assert fake_redis.eval_calls == 1
     assert len(fake_redis.lpush_calls) == 1
     assert fake_redis.lpush_calls[0][0] == api.settings.queue_name
+    queued = json.loads(fake_redis.lpush_calls[0][1])
+    assert queued["client_id"] == "testclient"
+    assert queued["prompt_version"] == api.settings.prompt_version
 
 
 
@@ -210,7 +273,7 @@ def test_s02_malformed_quarantine_is_persisted_with_field_errors_without_queuein
     assert len(stored) == 1
     assert isinstance(stored[0], api.Quarantine)
     assert json.loads(stored[0].raw_body) == scenario["claim"]
-    assert stored[0].client_id == "s02-acceptance-test"
+    assert stored[0].client_id == "testclient"
     assert fake_redis.eval_calls == 1
     assert fake_redis.lpush_calls == []
 
@@ -261,7 +324,6 @@ def test_invalid_claims_are_rate_limited_before_quarantine(monkeypatch):
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "6"
-    assert response.headers["retry-after"] == "6"
     assert stored == []
     assert fake_redis.lpush_calls == []
 
@@ -271,6 +333,40 @@ def test_token_bucket_allows_ten_and_rejects_the_eleventh():
     decisions = [api.allow_run(fake_redis, "token-bucket-client", 10) for _ in range(11)]
     assert all(allowed for allowed, _ in decisions[:10])
     assert decisions[10] == (False, 6)
+
+
+def test_rate_limit_returns_service_unavailable_when_redis_is_down(monkeypatch):
+    class UnavailableRedis(FakeRedis):
+        def eval(self, *_args):
+            raise redis.RedisError("redis unavailable")
+
+    stored = []
+    fake_redis = UnavailableRedis()
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+        "client": ("203.0.113.17", 12345), "state": {"cid": "redis-outage"},
+    })
+
+    with pytest.raises(api.HTTPException) as exc_info:
+        api.submit_claim(api.ClaimIn.model_validate(demo_claim()), request)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "rate limiter unavailable"
+    assert stored == []
+    assert fake_redis.lpush_calls == []
+
+
+def test_source_ip_is_used_instead_of_caller_supplied_client_id():
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims",
+        "headers": [(b"x-client-id", b"spoofed-id")],
+        "client": ("203.0.113.17", 12345),
+    })
+
+    assert api._client_id(request) == "203.0.113.17"
 
 
 def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):

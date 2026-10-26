@@ -10,6 +10,7 @@ import redis
 
 DEMO_CORPUS_VERSION = "demo-fixture-v1"
 CORPUS_VERSION_KEY = "triage:corpus:version"
+RUN_CACHE_VERSION = "graph-v1"
 
 TOKEN_BUCKET_SCRIPT = """
 local clock = redis.call('TIME')
@@ -36,7 +37,11 @@ return {allowed, retry}
 
 def _normalize(value: Any, key: str | None = None) -> Any:
     if isinstance(value, dict):
-        return {name: _normalize(item, name) for name, item in sorted(value.items()) if name != "prompt_version"}
+        return {
+            name: _normalize(item, name)
+            for name, item in sorted(value.items())
+            if name not in {"prompt_version", "client_id"}
+        }
     if isinstance(value, list):
         return [_normalize(item) for item in value]
     if isinstance(value, str):
@@ -50,15 +55,10 @@ def run_cache_key(
 ) -> str:
     payload = json.dumps({"claim": _normalize(claim), "prompt_version": prompt_version,
                           "corpus_version": corpus_version,
+                          "graph_version": RUN_CACHE_VERSION,
                           "client_scope": hashlib.sha256(client_scope.encode("utf-8")).hexdigest()},
                          sort_keys=True, separators=(",", ":"))
     return "triage:cache:run:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def retrieval_cache_key(query: str, mode: str, k: int, corpus_version: str) -> str:
-    normalized_query = " ".join(unicodedata.normalize("NFKC", query).split()).casefold()
-    payload = json.dumps([normalized_query, mode, k, corpus_version], separators=(",", ":"))
-    return "triage:cache:retrieval:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def current_corpus_version(client) -> str:
@@ -81,6 +81,25 @@ def cache_set(client, key: str, value: dict | list, ttl_seconds: int) -> None:
         client.set(key, json.dumps(value, separators=(",", ":")), ex=ttl_seconds)
     except redis.RedisError:
         return
+
+
+CACHEABLE_ESCALATION_REASONS = frozenset({
+    "CAUSE_DISPUTED",
+    "PROVISION_CONFLICT",
+    "OUT_OF_CORPUS",
+    "VERIFICATION_FAILED",
+    "GUARDRAIL_BLOCKED",
+})
+
+
+def cacheable_result(result: dict[str, Any]) -> bool:
+    """Cache verified results or known deterministic escalations only."""
+    if result.get("verified") is True:
+        return True
+    return (
+        result.get("route") == "escalate"
+        and result.get("escalation_reason") in CACHEABLE_ESCALATION_REASONS
+    )
 
 
 def allow_run(client, client_id: str, limit: int) -> tuple[bool, int]:

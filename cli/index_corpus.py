@@ -28,10 +28,14 @@ def load_chunks(path: Path) -> list[Chunk]:
 
 def record(chunk: Chunk) -> tuple[str, dict]:
     document = " > ".join([chunk.doc_id, *chunk.heading_path]) + "\n" + chunk.text
-    fingerprint = hashlib.sha256(chunk.model_dump_json().encode()).hexdigest()
+    embedding_hash = hashlib.sha256(document.encode()).hexdigest()
+    fingerprint_payload = json.dumps(
+        [chunk.model_dump(mode="json"), embedding_hash], sort_keys=True, separators=(",", ":")
+    )
+    fingerprint = hashlib.sha256(fingerprint_payload.encode()).hexdigest()
     return document, {
         "doc_id": chunk.doc_id, "clause_id": chunk.clause_id, "hash": chunk.hash,
-        "embedding_hash": hashlib.sha256(document.encode()).hexdigest(),
+        "embedding_hash": embedding_hash,
         "fingerprint": fingerprint, "heading_path": json.dumps(chunk.heading_path),
         "page": chunk.page if chunk.page is not None else -1, "refs": json.dumps(chunk.refs),
     }
@@ -141,11 +145,9 @@ def main() -> None:
                 collection(client, settings.chroma_collection),
                 force=args.force or not settings.cache_enabled,
             )
-            manifest = args.chunks.resolve().parents[1] / "manifest.yaml"
-            if manifest.exists():
-                version = hashlib.sha256(manifest.read_bytes()).hexdigest()
-                redis.Redis.from_url(settings.redis_url, decode_responses=True).set(CORPUS_VERSION_KEY, version)
-                result["corpus_version"] = version
+            version = hashlib.sha256(args.chunks.read_bytes()).hexdigest()
+            redis.Redis.from_url(settings.redis_url, decode_responses=True).set(CORPUS_VERSION_KEY, version)
+            result["corpus_version"] = version
         print(json.dumps({"collection": settings.chroma_collection, **result}, sort_keys=True))
     except Exception as exc:
         parser.exit(1, f"index: {exc}\n")

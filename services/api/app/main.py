@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 
@@ -47,6 +48,10 @@ QUARANTINED = Counter("claims_quarantined_total", "Claims rejected at the bounda
 CACHE_HITS = Counter("api_cache_hits_total", "API cache hits by component", ["component"])
 RAW_BODY_LIMIT = 16 * 1024
 SUBMIT_LATENCY = Histogram("submit_latency_seconds", "Latency of POST /v1/claims")
+RATE_LIMIT_REDIS_ERRORS = Counter(
+    "rate_limit_redis_errors_total", "Rate limit checks unavailable because Redis failed"
+)
+log = logging.getLogger("triage-api")
 
 
 @app.on_event("startup")
@@ -71,14 +76,18 @@ async def correlation_id(request: Request, call_next):
 
 
 def _client_id(request: Request) -> str:
-    candidate = request.headers.get("x-client-id")
-    if not candidate:
-        candidate = request.client.host if request.client else "unknown"
-    return candidate[:255]
+    # Client-supplied IDs are unauthenticated and cannot safely define quotas
+    # or cache namespaces. Honor only the source address seen by this service.
+    return (request.client.host if request.client else "unknown")[:255]
 
 
-def _rate_limit(client: str) -> tuple[bool, int]:
-    return allow_run(r, client, settings.rate_limit_per_min)
+def _rate_limit(client: str) -> tuple[bool, int] | None:
+    try:
+        return allow_run(r, client, settings.rate_limit_per_min)
+    except redis.RedisError:
+        RATE_LIMIT_REDIS_ERRORS.inc()
+        log.warning("Redis unavailable during rate-limit check; rejecting request with 503", exc_info=True)
+        return None
 
 
 @app.exception_handler(RequestValidationError)
@@ -96,7 +105,10 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
     ]
     qid = None
     if request.url.path == "/v1/claims":
-        allowed, retry_after = _rate_limit(_client_id(request))
+        rate_limit = _rate_limit(_client_id(request))
+        if rate_limit is None:
+            return JSONResponse(status_code=503, content={"detail": "rate limiter unavailable"})
+        allowed, retry_after = rate_limit
         if not allowed:
             return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"},
                                 headers={"Retry-After": str(retry_after)})
@@ -112,7 +124,10 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
 @app.post("/v1/claims", response_model=SubmitOut, status_code=202)
 def submit_claim(claim: ClaimIn, request: Request):
     with SUBMIT_LATENCY.time():
-        allowed, retry_after = _rate_limit(_client_id(request))
+        rate_limit = _rate_limit(_client_id(request))
+        if rate_limit is None:
+            raise HTTPException(503, "rate limiter unavailable")
+        allowed, retry_after = rate_limit
         if not allowed:
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": str(retry_after)})
         claim_data = claim.model_dump(mode="json")
@@ -120,8 +135,6 @@ def submit_claim(claim: ClaimIn, request: Request):
         prompt_version = request.headers.get("x-prompt-version", settings.prompt_version)
         if not re.fullmatch(r"v[12]", prompt_version):
             raise HTTPException(400, "x-prompt-version must be 'v1' or 'v2'")
-        claim_data["prompt_version"] = prompt_version
-        claim_data["client_id"] = client_id
         if settings.cache_enabled:
             corpus_version = current_corpus_version(r)
             key = run_cache_key(claim_data, prompt_version, corpus_version, client_id)
@@ -150,9 +163,10 @@ def submit_claim(claim: ClaimIn, request: Request):
                                  "messaging.system": "redis", "messaging.destination.name": settings.queue_name})
             carrier = {}
             inject(carrier)
-        r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
-                                               "prompt_version": prompt_version,
-                                                   "trace_context": carrier}))
+            r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
+                                                     "prompt_version": prompt_version,
+                                                     "client_id": client_id,
+                                                     "trace_context": carrier}))
         CLAIMS.inc()
         return SubmitOut(run_id=run_id, status=RunStatus.queued, poll_url=f"/v1/runs/{run_id}")
 
