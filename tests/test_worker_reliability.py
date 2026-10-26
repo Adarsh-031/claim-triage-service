@@ -87,7 +87,7 @@ def test_recovery_state_requeues_stale_run_and_clears_attempt_timestamps():
     run.error = "old failure"
     assert recover_stale_run_state(run, now=now, stale_after_s=30, max_requeues=2) == "requeued"
     assert run.status == RunStatus.queued.value
-    assert run.requeue_count == 2
+    assert run.requeue_count == 1
     assert run.started_at is None
     assert run.heartbeat_at is None
     assert run.finished_at is None
@@ -96,10 +96,10 @@ def test_recovery_state_requeues_stale_run_and_clears_attempt_timestamps():
 
 def test_recovery_state_fails_stale_run_at_retry_limit_without_requeueing():
     now = datetime.now(UTC)
-    run = _run(now, age_s=90, heartbeat_age_s=45, requeues=2)
+    run = _run(now, age_s=90, heartbeat_age_s=45, requeues=3)
     assert recover_stale_run_state(run, now=now, stale_after_s=30, max_requeues=2) == "failed"
     assert run.status == RunStatus.failed.value
-    assert run.requeue_count == 2
+    assert run.requeue_count == 3
     assert run.finished_at == now
     assert run.heartbeat_at is None
     assert run.error == "Automated processing failed after recovery attempts; human review is required."
@@ -160,7 +160,7 @@ def _patch_worker_store(monkeypatch, run, updates):
     monkeypatch.setattr(worker_main, "get_run", lambda _run_id: run)
     def claim(_run_id, now=None):
         updates.append({"status": RunStatus.running.value, "started_at": now})
-        return 0
+        return 1
     def finish(_run_id, attempt, **fields):
         updates.append(fields)
         return True

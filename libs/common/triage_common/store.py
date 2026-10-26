@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select, text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -59,17 +59,8 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def init_db() -> None:
-    # create_all creates missing tables but does not add columns to an existing runs table.
+    # Schema upgrades are handled by deploy/postgres/init.sql for fresh databases.
     Base.metadata.create_all(engine)
-    # Keep existing persistent volumes compatible with the current Run model.
-    # IF NOT EXISTS makes this safe to execute on every service startup.
-    with engine.begin() as connection:
-        connection.execute(text(
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS requeue_count integer NOT NULL DEFAULT 0"
-        ))
-        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_at timestamptz"))
-        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz"))
-        connection.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS finished_at timestamptz"))
 
 
 def list_quarantine(limit: int = 50) -> list[Quarantine]:
@@ -91,14 +82,14 @@ def update_run(run_id: uuid.UUID, **fields) -> None:
 
 
 def claim_run(run_id: uuid.UUID, *, now: datetime | None = None) -> int | None:
-    """Atomically claim a queued run and return its recovery-attempt number."""
+    """Atomically claim a queued run and return its claim-attempt number."""
     now = now or _now()
     with SessionLocal() as session, session.begin():
         result = session.execute(
             sa_update(Run)
             .where(Run.id == run_id, Run.status == "queued")
             .values(status="running", started_at=now, heartbeat_at=now, finished_at=None,
-                    error=None, updated_at=now)
+                    error=None, requeue_count=Run.requeue_count + 1, updated_at=now)
         )
         if result.rowcount != 1:
             return None
@@ -153,7 +144,8 @@ def recover_stale_run_state(
     if anchor > now - timedelta(seconds=stale_after_s):
         return "not_stale"
 
-    if run.requeue_count >= max_requeues:
+    # The initial claim is counted, so permit it plus the configured recovery claims.
+    if run.requeue_count >= max_requeues + 1:
         run.status = "failed"
         run.error = "Automated processing failed after recovery attempts; human review is required."
         run.result = Recommendation(
@@ -167,7 +159,7 @@ def recover_stale_run_state(
         run.updated_at = now
         return "failed"
 
-    run.requeue_count += 1
+    # Count a retry only when a worker successfully claims the queued run.
     run.status = "queued"
     run.started_at = None
     run.heartbeat_at = None
