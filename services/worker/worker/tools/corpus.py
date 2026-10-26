@@ -155,7 +155,7 @@ def _vector_search(query: str, k: int, doc_id: str | None) -> list[dict]:
         }
         vector_rank = {}
         by_id = {}
-        for chunk in chunks:
+        for rank, chunk in enumerate(chunks, start=1):
             distance = distance_by_id.get(chunk["chunk_id"])
             chunk["score"] = round(1.0 - float(distance), 6) if distance is not None else 0.0
             if chunk["score"] >= MIN_VECTOR_SIMILARITY:
