@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from triage_common.contracts import EscalationReason
-from worker.agent.intake import IntakeError, IntakeFacts, extract_intake, is_in_scope_route, _prompt_text
+from worker.agent.intake import IntakeError, IntakeFacts, _prompt_text, extract_intake, is_in_scope_route
 
 ROOT = Path(__file__).parents[1]
 

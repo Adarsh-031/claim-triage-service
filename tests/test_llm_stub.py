@@ -3,10 +3,9 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from triage_common.contracts import ClaimIn
-
-from fastapi.testclient import TestClient
 
 APP_PATH = Path(__file__).parents[1] / "services" / "llm-stub" / "app.py"
 SPEC = importlib.util.spec_from_file_location("llm_stub_app", APP_PATH)
@@ -57,6 +56,7 @@ def test_scripted_intake_response_for_prompt_injection_scenario(monkeypatch):
 
 
 def test_claim_contract_rejects_stub_scenario_metadata():
-    claim = json.loads((Path(__file__).parents[1] / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text())["claim"]
+    scenario_path = Path(__file__).parents[1] / "eval/scenarios/s01_demo_cancellation_alternate_taken.json"
+    claim = json.loads(scenario_path.read_text())["claim"]
     with pytest.raises(ValidationError):
         ClaimIn.model_validate({**claim, "_scenario_id": "s23_statement_prompt_injection"})

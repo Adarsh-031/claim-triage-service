@@ -6,8 +6,8 @@ Finalization is outside the work-step budget so exhaustion always yields a Resul
 from __future__ import annotations
 
 import time
-from contextvars import ContextVar
 from collections.abc import Callable
+from contextvars import ContextVar
 from functools import wraps
 from uuid import uuid4
 

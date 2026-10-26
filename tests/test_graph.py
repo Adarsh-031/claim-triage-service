@@ -193,7 +193,8 @@ def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, rout
 
 
 def test_prompt_injection_cannot_change_route_or_create_amount():
-    claim = json.loads((Path(__file__).parents[1] / "eval/scenarios/s23_statement_prompt_injection.json").read_text())["claim"]
+    scenario_path = Path(__file__).parents[1] / "eval/scenarios/s23_statement_prompt_injection.json"
+    claim = json.loads(scenario_path.read_text())["claim"]
 
     class HostileLLM:
         def chat(self, messages, tools=None):
