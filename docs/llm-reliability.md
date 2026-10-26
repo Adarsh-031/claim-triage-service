@@ -1,14 +1,18 @@
 # LLM provider reliability
 
 The OpenAI-compatible provider client enforces `LLM_TIMEOUT_S` (20 seconds by
-default). `ResilientLLM` retries transient HTTP/response failures up to `RETRY_MAX`
-with exponential backoff and jitter, then uses the configured fallback model. When
-fallback is absent or fails, callers must escalate; provider failures must never be
-turned into confident claim answers.
+default), bounded further by the remaining agent run deadline. `ResilientLLM` retries
+network/response failures and HTTP 429/5xx up to `RETRY_MAX` with exponential
+backoff and jitter. It does not retry permanent HTTP 4xx responses; it gives the
+configured fallback model one attempt instead. When fallback is absent or fails,
+callers must escalate; provider failures must never be turned into confident claim
+answers.
 
 The primary provider circuit breaker is shared across worker replicas through Redis.
-It opens after `BREAKER_FAIL_THRESHOLD` failures within `BREAKER_WINDOW_S`, rejects
-calls while open, and permits one half-open probe after `BREAKER_RESET_S`. The
+It opens after `BREAKER_FAIL_THRESHOLD` failures within `BREAKER_WINDOW_S`, even if
+successful calls occur between failures. While open it rejects primary calls and
+permits one half-open probe after `BREAKER_RESET_S`; only that successful probe
+clears the failure window and closes the breaker. The
 `llm_circuit_breaker_state` gauge reports 0 (closed), 1 (open), or 2 (half-open) for
 the provider label.
 

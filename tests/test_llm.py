@@ -67,7 +67,16 @@ class FakeRedis:
     def pipeline(self):
         return FakePipeline(self)
 
-    def eval(self, _script, _key_count, key, token):
+    def eval(self, _script, key_count, *args):
+        if key_count == 3:
+            probe_key, failures_key, open_key, token = args
+            if self.values.get(probe_key) == token:
+                self.values.pop(probe_key, None)
+                self.values.pop(failures_key, None)
+                self.values.pop(open_key, None)
+                self.sorted.pop(failures_key, None)
+            return
+        key, token = args
         if self.values.get(key) == token:
             self.values.pop(key, None)
 
@@ -123,6 +132,27 @@ def test_breaker_does_not_reset_open_window_on_later_failure():
     assert client.values[breaker.open_key] == opened_at
 
 
+def test_breaker_counts_failures_across_successful_requests():
+    client = FakeRedis()
+    breaker = CircuitBreaker(2, 30, 30, client=client)
+
+    breaker.failure()
+    breaker.success()  # Ordinary success must not erase the sliding failure window.
+    breaker.failure()
+
+    assert breaker.state == "open"
+
+
+def test_in_flight_closed_request_cannot_close_breaker_opened_elsewhere():
+    client = FakeRedis()
+    breaker = CircuitBreaker(1, 30, 30, client=client)
+
+    breaker.failure()
+    breaker.success()
+
+    assert breaker.state == "open"
+
+
 def test_breaker_allows_one_half_open_probe_and_closes_after_success(monkeypatch):
     client = FakeRedis()
     breaker = CircuitBreaker(1, 30, 30, client=client)
@@ -134,6 +164,8 @@ def test_breaker_allows_one_half_open_probe_and_closes_after_success(monkeypatch
         CircuitBreaker(1, 30, 30, client=client).before()
     breaker.success()
     assert breaker.state == "closed"
+    assert breaker.failures_key not in client.sorted
+    assert breaker.probe_key not in client.values
 
 
 def test_resilient_llm_retries_primary_then_uses_fallback(monkeypatch):
@@ -229,3 +261,52 @@ def test_resilient_llm_uses_primary_without_fallback_when_primary_recovers(monke
 
     assert resilient.chat([])["content"] == "primary"
     assert fallback.calls == 0
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_resilient_llm_does_not_retry_non_retryable_http_status(monkeypatch, status):
+    monkeypatch.setattr("worker.agent.llm.settings.retry_max", 4)
+    response = httpx.Response(status, request=httpx.Request("POST", "https://provider.test/chat"))
+    error = httpx.HTTPStatusError("provider rejected request", request=response.request, response=response)
+    primary = StubLLM([error])
+    fallback = StubLLM([{"content": "fallback"}])
+    breaker = CircuitBreaker(5, 30, 30, client=FakeRedis())
+
+    result = ResilientLLM(primary, fallback, breaker).chat([])
+
+    assert result["content"] == "fallback"
+    assert primary.calls == fallback.calls == 1
+    assert breaker.state == "closed"
+    assert not breaker.client.sorted.get(breaker.failures_key)
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_resilient_llm_retries_transient_http_status(monkeypatch, status):
+    monkeypatch.setattr("worker.agent.llm.settings.retry_max", 3)
+    monkeypatch.setattr("worker.agent.llm.time.sleep", lambda _delay: None)
+    response = httpx.Response(status, request=httpx.Request("POST", "https://provider.test/chat"))
+    error = httpx.HTTPStatusError("transient provider response", request=response.request, response=response)
+    primary = StubLLM([error, error, {"content": "recovered"}])
+    resilient = ResilientLLM(primary, None, CircuitBreaker(5, 30, 30, client=FakeRedis()))
+
+    assert resilient.chat([])["content"] == "recovered"
+    assert primary.calls == 3
+
+
+def test_resilient_llm_bounds_retries_to_remaining_run_deadline(monkeypatch):
+    now = [100.0]
+    seen_timeouts = []
+    monkeypatch.setattr("worker.agent.llm.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("worker.agent.llm.time.sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    monkeypatch.setattr("worker.agent.llm.random.uniform", lambda *_args: 0)
+
+    class DeadlineProvider:
+        def chat(self, _messages, _tools=None, *, timeout_s=None):
+            seen_timeouts.append(timeout_s)
+            raise httpx.ConnectError("offline")
+
+    resilient = ResilientLLM(DeadlineProvider(), None, CircuitBreaker(5, 30, 30, client=FakeRedis()))
+    with pytest.raises(httpx.TimeoutException, match="deadline exhausted"):
+        resilient.chat([], timeout_s=0.75)
+
+    assert seen_timeouts == [0.75, 0.25]

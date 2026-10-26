@@ -16,6 +16,12 @@ from ..metrics import LLM_BREAKER_STATE
 
 log = logging.getLogger(__name__)
 
+_COMPLETE_PROBE_SCRIPT = """
+if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('del', KEYS[1], KEYS[2], KEYS[3])
+return 1
+"""
+
 
 class LLM(Protocol):
     def chat(self, messages: list[dict], tools: list[dict] | None = None,
@@ -76,7 +82,7 @@ class CircuitBreaker:
                 token = uuid4().hex
                 acquired = self.client.set(
                     self.probe_key, token, nx=True,
-                    px=max(1000, int(settings.llm_timeout_s * 1000)),
+                    px=max(1000, int((settings.llm_timeout_s + 5) * 1000)),
                 )
                 if acquired:
                     self.probe_token = token
@@ -90,12 +96,19 @@ class CircuitBreaker:
             raise CircuitOpen("provider circuit half-open probe already in progress")
 
     def success(self) -> None:
+        # A success from a request admitted while closed must not erase the
+        # rolling failure window or close a breaker another worker opened.
+        # Only the current half-open probe may reset that shared state.
+        if not self.probe_token:
+            return
         try:
-            self.client.delete(self.failures_key, self.open_key)
+            self.client.eval(
+                _COMPLETE_PROBE_SCRIPT, 3, self.probe_key, self.failures_key, self.open_key, self.probe_token,
+            )
         except redis.RedisError:
             log.warning("Redis unavailable after successful %s call; breaker state may be stale", self.name)
         finally:
-            self._release_probe()
+            self.probe_token = None
 
     def failure(self) -> None:
         try:
@@ -179,6 +192,15 @@ class ResilientLLM:
                 raise httpx.TimeoutException("Research run deadline exhausted")
             return left
 
+        def retry_after_failure(attempt: int) -> bool:
+            self.breaker.failure()
+            left = remaining()
+            if self.breaker.state != "closed" or attempt + 1 >= settings.retry_max:
+                return False
+            delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
+            time.sleep(min(delay, left) if left is not None else delay)
+            return True
+
         try:
             self.breaker.before()
             for attempt in range(settings.retry_max):
@@ -186,14 +208,17 @@ class ResilientLLM:
                     out = self.primary.chat(messages, tools, timeout_s=remaining())
                     self.breaker.success()
                     return out
-                except (httpx.HTTPError, KeyError):
-                    self.breaker.failure()
-                    if self.breaker.state != "closed":
+                except httpx.HTTPStatusError as exc:
+                    # Client/configuration errors will not improve by retrying the
+                    # same model. Let the configured fallback try once instead.
+                    status = exc.response.status_code
+                    if status != 429 and status < 500:
+                        raise CircuitOpen(f"primary returned non-retryable HTTP {status}") from exc
+                    if not retry_after_failure(attempt):
                         break
-                    if attempt + 1 < settings.retry_max:
-                        delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
-                        left = remaining()
-                        time.sleep(min(delay, left) if left is not None else delay)
+                except (httpx.HTTPError, KeyError):
+                    if not retry_after_failure(attempt):
+                        break
             raise CircuitOpen("primary exhausted retries")
         except CircuitOpen:
             if self.fallback is None:
