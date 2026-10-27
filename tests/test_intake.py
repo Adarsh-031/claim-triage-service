@@ -5,9 +5,9 @@ import pytest
 from pydantic import ValidationError
 from triage_common.contracts import EscalationReason
 from worker.agent.intake import (
+    _INDIA_ORIGINS,
     IntakeError,
     IntakeFacts,
-    _INDIA_ORIGINS,
     _prompt_text,
     extract_intake,
     is_in_scope_route,
