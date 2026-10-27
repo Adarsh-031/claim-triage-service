@@ -40,7 +40,10 @@ def _handle(job: dict) -> None:
     RUNS_STARTED.inc()
     update_run(run_id, status=RunStatus.running.value)
     try:
-        result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id), llm=get_llm())
+        llm = None if settings.llm_provider == "stub" else get_llm()
+        result, trace = run_agent(
+            run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id), llm=llm
+        )
         # Preserve the API/store contract while the graph emits the stable Result.
         rec = Recommendation(
             route=result.route, summary=result.summary, compensation_inr=result.amount,
