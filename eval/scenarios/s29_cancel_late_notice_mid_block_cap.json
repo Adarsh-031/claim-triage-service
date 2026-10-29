@@ -1,0 +1,15 @@
+{
+  "id": "s29_cancel_late_notice_mid_block_cap",
+  "description": "Cancellation notice under 24 hours, no acceptable alternate, with basic fare plus fuel exceeding the middle block-time cap.",
+  "claim": {
+    "pnr": "CA029A", "airline_code": "6E", "flight_number": "6E505",
+    "flight_date": "2026-11-16", "origin": "MAA", "destination": "CCU",
+    "block_time_minutes": 90, "ticket_fare_inr": 9000,
+    "one_way_basic_fare_inr": 7000, "airline_fuel_charge_inr": 1000,
+    "disruption_type": "cancellation",
+    "notice_minutes_before_departure": 120, "reported_at_airport": true,
+    "contact_info_provided": true, "alternate": {"offered": false, "accepted": false},
+    "statement": "The airline cancelled my flight two hours before departure, offered no alternate flight, and I had already checked in at the airport. I request the applicable remedy."
+  },
+  "expected": {"route": "pay_as_computed", "compensation_inr": 7500, "must_cite": ["3.3.2"]}
+}

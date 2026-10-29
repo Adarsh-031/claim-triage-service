@@ -1,6 +1,6 @@
 # Evaluation set (L3)
 
-The 28 committed scenarios exercise cancellation, delay, denied boarding, downgrade,
+The 29 committed scenarios exercise cancellation, delay, denied boarding, downgrade,
 quarantine, missing evidence, and escalation. Their expected routes are acceptance
 criteria, not values rewritten to match today's agent. The independent grounding
 verifier remains incomplete, so safe escalation can legitimately fail a desired
@@ -43,6 +43,7 @@ provider stub, and uploads the reports and service logs as `evaluation-smoke`.
   passages, and answer relevance. Context is recovered from tool trace chunk IDs,
   not just the passages the final answer chose to cite. Only allowlisted structured
   claim facts are sent as the question, never PNR or passenger narrative.
+  The judge receives only clause text, facts, and the answer, never the PNR, flight number, or statement.
 - Hallucination rate is the **1 − groundedness judge-score proxy**. It is not an
   independently verified factual-error frequency. Each metric reports its measured
   scenario count; missing context and judge failures remain explicit.

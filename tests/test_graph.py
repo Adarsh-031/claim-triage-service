@@ -43,7 +43,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "v1"
+    assert result.prompt_version == "research-v1+v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
@@ -71,8 +71,21 @@ def test_technical_fault_escalates_conflict_with_car_and_airline_citations():
 
 @pytest.mark.parametrize("prompt_version", ["v1", "v2"])
 def test_run_agent_preserves_requested_prompt_version(prompt_version):
-    result, _ = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
-    assert result.prompt_version == prompt_version
+    result, trace = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
+    assert result.prompt_version == f"research-v1+{prompt_version}"
+    intake = next(t for t in trace if t["step"] == "intake")
+    assert intake["prompt_version"] == prompt_version
+
+
+@pytest.mark.parametrize("scenario_id", [
+    "s05_cancel_late_notice_no_alternate", "s29_cancel_late_notice_mid_block_cap",
+])
+def test_cancellation_gold_amount_matches_calculator_trace(scenario_id):
+    scenario = json.loads((SCENARIO_DIR / f"{scenario_id}.json").read_text())
+    _, trace = graph.run_agent(scenario["claim"])
+    draft = next(t for t in trace if t["step"] == "draft")
+    assert draft["compensation"]["status"] == "computed"
+    assert draft["compensation"]["amount"] == scenario["expected"]["compensation_inr"]
 
 
 def test_run_agent_rejects_unknown_prompt_version():

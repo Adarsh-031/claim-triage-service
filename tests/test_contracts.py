@@ -121,8 +121,8 @@ def test_pay_with_amount_and_citation_is_valid():
 def test_claim_accepts_explicit_calculator_fare_components():
     scenario = json.loads((ROOT / "eval/scenarios/s05_cancel_late_notice_no_alternate.json").read_text())
     claim = ClaimIn.model_validate(scenario["claim"])
-    assert claim.one_way_basic_fare_inr == 9000
-    assert claim.airline_fuel_charge_inr == 1000
+    assert claim.one_way_basic_fare_inr == 6000
+    assert claim.airline_fuel_charge_inr == 500
 
 
 def test_escalate_requires_reason():

@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import httpx
@@ -51,6 +52,29 @@ def test_summary_empty_results_has_null_rates():
     summary = summarize([])
     assert summary["route_accuracy"] is None
     assert summary["citation_resolution_rate"] is None
+
+
+def test_report_prompt_hash_tracks_shared_and_version_instructions(tmp_path, monkeypatch):
+    from cli import evaluate
+
+    monkeypatch.setattr(evaluate, "ROOT", tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    base = prompts / "research_v1.md"
+    base.write_text("Shared research instructions", encoding="utf-8")
+    for version in ("v1", "v2"):
+        (prompts / f"{version}.md").write_text(f"{version} instructions", encoding="utf-8")
+    output = tmp_path / "results"
+    write_report(output, {"v1": [], "v2": []})
+    hashes = json.loads((output / "eval-results.json").read_text())["prompt_sha256"]
+    for version in ("v1", "v2"):
+        sent = f"Shared research instructions\n\n{version} instructions"
+        assert hashes[version] == hashlib.sha256(sent.encode()).hexdigest()
+
+    base.write_text("Updated shared instructions", encoding="utf-8")
+    write_report(output, {"v1": [], "v2": []})
+    updated = json.loads((output / "eval-results.json").read_text())["prompt_sha256"]
+    assert all(updated[v] != hashes[v] for v in hashes)
 
 
 def test_citations_require_matching_clause_and_nonempty_exact_quote():

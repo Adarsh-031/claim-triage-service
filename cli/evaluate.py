@@ -36,6 +36,12 @@ def _corpus_hash(directory: Path | None = None) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
+def _prompt_hash(v: str) -> str:
+    sent = ((ROOT / "prompts/research_v1.md").read_text(encoding="utf-8") + "\n\n" +
+            (ROOT / f"prompts/{v}.md").read_text(encoding="utf-8"))
+    return hashlib.sha256(sent.encode()).hexdigest()
+
+
 def _citation_metrics(result, expected, chunks=None) -> dict:
     citations = (result or {}).get("citations") or []
     required = expected.get("must_cite", [])
@@ -179,8 +185,8 @@ def write_report(output_dir, results_by_version, *, report_path=None, corpus_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     summary = {v: summarize(rows) for v, rows in results_by_version.items()}
     artifact = {"generated_at": datetime.now(UTC).isoformat(), "corpus_chunks_sha256": _corpus_hash(corpus_dir),
-                "prompt_sha256": {v: hashlib.sha256((ROOT / f"prompts/{v}.md").read_bytes()).hexdigest()
-                                  for v in results_by_version}, "summary": summary, "results": results_by_version}
+                "prompt_sha256": {v: _prompt_hash(v) for v in results_by_version},
+                "summary": summary, "results": results_by_version}
     (output_dir / "eval-results.json").write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     def pct(value):
         return "N/A" if value is None else f"{value:.1%}"

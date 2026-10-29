@@ -215,7 +215,7 @@ def finalize(state: RunState) -> RunState:
             "citations": draft.get("citations", []),
         }
     result = Result(
-        **draft, run_id=state["run_id"], prompt_version=state["prompt_version"],
+        **draft, run_id=state["run_id"], prompt_version=f"{PROMPT_VERSION}+{state['prompt_version']}",
         corpus_version=state["corpus_version"],
     )
     state["result"] = result.model_dump(mode="json")

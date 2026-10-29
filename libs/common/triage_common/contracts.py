@@ -276,4 +276,3 @@ class FeedbackIn(BaseModel):
 
     agree: bool
     note: str | None = Field(default=None, max_length=2000)
-
