@@ -495,6 +495,8 @@ def test_vietnam_route_is_escalated_before_retrieval():
     assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
     assert trace[-1]["step"] == "finalize"
     assert not any(entry["step"] == "research" for entry in trace)
+    intake = next(item for item in trace if item["step"] == "intake")
+    assert intake["corpus_version"] == result.corpus_version == corpus.get_corpus().version
 
 
 def test_narrative_facts_reach_research_tools_checklist_and_calculator():
@@ -538,6 +540,7 @@ def test_hostile_intake_output_cannot_add_a_route_or_amount():
     assert result.route is Route.ESCALATE and result.amount is None
     assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
     assert [item["step"] for item in trace] == ["start", "intake", "finalize"]
+    assert trace[1]["corpus_version"] == result.corpus_version == corpus.get_corpus().version
     assert graph._INTAKE_LLM.get() is None
     # A subsequent run must not reuse the failing injected provider.
     _, next_trace = graph.run_agent(SCENARIO["claim"])

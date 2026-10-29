@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -94,6 +95,11 @@ def intake(state: RunState) -> RunState:
     state["facts"] = research_facts(state["claim"])
     state["retrieved"] = []
     state["checklist"] = checklist(state)
+    if state.get("draft"):
+        # Early referrals still identify the deployed corpus for evaluation/provenance.
+        # Resolve local corpus identity without retrieving evidence or calling a provider.
+        with suppress(OSError, ValueError):
+            state["corpus_version"] = get_corpus().version
     _log(state, "intake", facts=extracted if extracted is not None else state["facts"],
          prompt_version=state["prompt_version"], intake_prompt_version=INTAKE_PROMPT_VERSION,
          corpus_version=state["corpus_version"])
