@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +24,9 @@ class Settings(BaseSettings):
     breaker_reset_s: float = 30
 
     airline_code: str = ""
+    corpus_dir: str = ""  # Defaults to <repo>/corpus/processed; mounted read-only in workers.
+    research_prompt_path: str = ""  # Container image sets an absolute path for its installed package.
+    intake_prompt_path: str = ""  # Installed workers cannot rely on repository-relative paths.
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     redis_url: str = "redis://redis:6379/0"
@@ -31,7 +35,10 @@ class Settings(BaseSettings):
     chroma_collection: str = "triage-clauses-v1"
     worker_metrics_port: int = 8002
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
-    rate_limit_per_min: int = 30
+    rate_limit_per_min: int = Field(default=10, ge=1)
+    cache_enabled: bool = True
+    cache_ttl_s: int = Field(default=3600, ge=1)
+    prompt_version: str = "v1"
 
     queue_name: str = "triage:runs"
 

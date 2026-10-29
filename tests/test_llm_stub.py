@@ -37,6 +37,27 @@ def test_chat_completions_matches_openai_shape(monkeypatch):
     assert set(body["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
 
 
+def test_error_fault_injection_returns_provider_error(monkeypatch):
+    monkeypatch.setattr(llm_stub_app, "STUB_MODE", "error")
+    response = client.post("/v1/chat/completions", json={"model": "test", "messages": []})
+    assert response.status_code == 503
+
+
+def test_slow_fault_injection_uses_configured_delay(monkeypatch):
+    delays = []
+
+    async def no_wait(_delay):
+        delays.append(_delay)
+        return None
+
+    monkeypatch.setattr(llm_stub_app, "STUB_MODE", "slow")
+    monkeypatch.setattr(llm_stub_app, "STUB_SLOW_DELAY", 17)
+    monkeypatch.setattr(llm_stub_app.asyncio, "sleep", no_wait)
+    result = client.post("/v1/chat/completions", json={"model": "test", "messages": []}).json()
+    assert result["object"] == "chat.completion"
+    assert delays == [17]
+
+
 def test_scripted_intake_response_for_prompt_injection_scenario(monkeypatch):
     monkeypatch.setattr(llm_stub_app, "STUB_DELAY", 0)
     response = client.post(

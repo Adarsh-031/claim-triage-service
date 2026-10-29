@@ -5,9 +5,14 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import pytest
+import redis
 from app import main as api
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from triage_common.cache import CORPUS_VERSION_KEY
 
 ROOT = Path(__file__).resolve().parents[1]
 client = TestClient(api.app)
@@ -39,16 +44,19 @@ class FakeSession:
 
 class FakeRedis:
     def __init__(self):
-        self.incr_calls = 0
-        self.expire_calls = 0
         self.lpush_calls = []
+        self.eval_calls = 0
+        self.values = {}
 
-    def incr(self, _key):
-        self.incr_calls += 1
-        return 1
+    def eval(self, _script, _count, _key, limit, _refill):
+        self.eval_calls += 1
+        return [int(self.eval_calls <= limit), 0 if self.eval_calls <= limit else 6]
 
-    def expire(self, *_args):
-        self.expire_calls += 1
+    def get(self, key):
+        return self.values.get(key)
+
+    def set(self, key, value, **_kwargs):
+        self.values[key] = value
 
     def lpush(self, *args):
         self.lpush_calls.append(args)
@@ -59,6 +67,163 @@ def demo_claim():
         (ROOT / "eval/scenarios/s01_demo_cancellation_alternate_taken.json").read_text(encoding="utf-8")
     )
     return scenario["claim"]
+
+
+def test_missing_corpus_version_skips_cache_and_enqueues_claim(monkeypatch):
+    stored = []
+    fake_redis = FakeRedis()
+    # A leftover entry under the old fallback must never be read.
+    claim = api.ClaimIn.model_validate(demo_claim())
+    stale_key = api.run_cache_key(claim.model_dump(mode="json"), "v1", "demo-fixture-v1", "127.0.0.1")
+    fake_redis.set(stale_key, '{"status":"escalated","result":{}}')
+    assert api.current_corpus_version(fake_redis) is None
+    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    cache_read = Mock(side_effect=AssertionError("unknown corpus must skip cache"))
+    monkeypatch.setattr(api, "cache_get", cache_read)
+    key_builder = Mock(side_effect=AssertionError("unknown corpus must skip cache key"))
+    monkeypatch.setattr(api, "run_cache_key", key_builder)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+        "client": ("127.0.0.1", 12345), "state": {"cid": "unknown-corpus"},
+    })
+
+    response = api.submit_claim(claim, request)
+
+    assert response.status is api.RunStatus.queued
+    assert len(stored) == len(fake_redis.lpush_calls) == 1
+    cache_read.assert_not_called()
+    key_builder.assert_not_called()
+
+
+def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
+    stored = []
+    fake_redis = FakeRedis()
+    claim_data = demo_claim()
+    client_id = "127.0.0.1"
+    prompt_version = "v1"
+    fake_redis.set(CORPUS_VERSION_KEY, "corpus-a")
+    cached_result = {
+        "route": "escalate",
+        "summary": "Cached safe result",
+        "entitlements": [],
+        "compensation_inr": None,
+        "citations": [],
+        "escalation_reason": "VERIFICATION_FAILED",
+        "verified": False,
+        "requires_human_approval": True,
+    }
+    normalized_claim = api.ClaimIn.model_validate(claim_data).model_dump(mode="json")
+    key = api.run_cache_key(normalized_claim, prompt_version,
+                            api.current_corpus_version(fake_redis), client_id)
+    fake_redis.set(key, json.dumps({"status": "escalated", "result": cached_result}), ex=300)
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims",
+        "headers": [(b"x-client-id", b"forged-other-client")],
+        "client": ("127.0.0.1", 12345), "state": {"cid": "cache-test"},
+    })
+
+    response = api.submit_claim(api.ClaimIn.model_validate(claim_data), request)
+
+    assert response.status == api.RunStatus.escalated
+    assert len(stored) == 1
+    assert stored[0].result == cached_result
+    assert stored[0].trace[0]["hit"] is True
+    assert fake_redis.lpush_calls == []
+
+
+def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch, research_env):
+    from triage_common.contracts import EscalationReason, Route
+    from worker import main as worker
+
+    stored = []
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    monkeypatch.setattr(worker, "cache_redis", fake_redis)
+    fake_redis.set(CORPUS_VERSION_KEY, worker.get_corpus().version)
+    monkeypatch.setattr(worker, "get_run", lambda _run_id: stored[0])
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, **_kwargs: 1)
+
+    def finish_run(_run_id, _attempt, **fields):
+        for name, value in fields.items():
+            setattr(stored[0], name, value)
+        return True
+
+    monkeypatch.setattr(worker, "finish_run", finish_run)
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                route=Route.ESCALATE,
+                summary="Needs officer review",
+                amount=None,
+                citations=[],
+                escalation_reason=EscalationReason.VERIFICATION_FAILED,
+            ),
+            [{"step": "finalize"}],
+        ),
+    )
+
+    claim = api.ClaimIn.model_validate(demo_claim())
+
+    def request():
+        return Request({
+            "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+            "client": ("127.0.0.1", 12345), "state": {"cid": "cache-roundtrip"},
+        })
+
+    first = api.submit_claim(claim, request())
+    job = json.loads(fake_redis.lpush_calls[0][1])
+    assert worker.handle(job) is True
+    second = api.submit_claim(claim, request())
+
+    assert first.status is api.RunStatus.queued
+    assert second.status is api.RunStatus.escalated
+    assert len(fake_redis.lpush_calls) == 1
+    assert len(stored) == 2
+    assert stored[0].claim == api.ClaimIn.model_validate(demo_claim()).model_dump(mode="json")
+    assert "client_id" not in stored[0].claim
+    assert "prompt_version" not in stored[0].claim
+    assert stored[1].trace[0]["hit"] is True
+
+
+def test_worker_does_not_cache_provider_failures(monkeypatch, research_env):
+    from triage_common.contracts import EscalationReason, Route
+    from worker import main as worker
+
+    fake_redis = FakeRedis()
+    stored = SimpleNamespace(claim=demo_claim())
+    monkeypatch.setattr(worker.settings, "cache_enabled", True)
+    monkeypatch.setattr(worker, "cache_redis", fake_redis)
+    monkeypatch.setattr(worker, "get_run", lambda _run_id: stored)
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, **_kwargs: 1)
+    monkeypatch.setattr(worker, "finish_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                route=Route.ESCALATE,
+                summary="Provider unavailable",
+                amount=None,
+                citations=[],
+                escalation_reason=EscalationReason.PROVIDER_DEGRADED,
+            ),
+            [{"step": "error"}],
+        ),
+    )
+
+    assert worker.handle({"run_id": str(uuid.uuid4()), "client_id": "127.0.0.1"}) is True
+
+    assert not any(key.startswith("triage:cache:run:") for key in fake_redis.values)
 
 
 def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
@@ -84,9 +249,9 @@ def test_invalid_claim_is_quarantined_and_never_enqueued(monkeypatch):
     quarantine = stored[0]
     assert isinstance(quarantine, api.Quarantine)
     assert json.loads(quarantine.raw_body)["statement"] == claim["statement"]
-    assert quarantine.client_id == "quarantine-test-client"
+    assert quarantine.client_id == "testclient"
     assert len(quarantine.raw_body.encode("utf-8")) <= api.RAW_BODY_LIMIT
-    assert fake_redis.incr_calls == 1
+    assert fake_redis.eval_calls == 1
     assert fake_redis.lpush_calls == []
 
 
@@ -141,9 +306,14 @@ def test_valid_claim_still_queues_unchanged(monkeypatch):
     assert body["run_id"]
     assert len(stored) == 1
     assert isinstance(stored[0], api.Run)
-    assert fake_redis.incr_calls == 1
+    assert "client_id" not in stored[0].claim
+    assert "prompt_version" not in stored[0].claim
+    assert fake_redis.eval_calls == 1
     assert len(fake_redis.lpush_calls) == 1
     assert fake_redis.lpush_calls[0][0] == api.settings.queue_name
+    queued = json.loads(fake_redis.lpush_calls[0][1])
+    assert queued["client_id"] == "testclient"
+    assert queued["prompt_version"] == api.settings.prompt_version
 
 
 
@@ -169,8 +339,8 @@ def test_s02_malformed_quarantine_is_persisted_with_field_errors_without_queuein
     assert len(stored) == 1
     assert isinstance(stored[0], api.Quarantine)
     assert json.loads(stored[0].raw_body) == scenario["claim"]
-    assert stored[0].client_id == "s02-acceptance-test"
-    assert fake_redis.incr_calls == 1
+    assert stored[0].client_id == "testclient"
+    assert fake_redis.eval_calls == 1
     assert fake_redis.lpush_calls == []
 
 
@@ -189,7 +359,7 @@ def test_cross_field_validation_error_is_reported_against_destination(monkeypatc
     assert any(error["field"] == "destination" for error in response.json()["errors"])
     assert len(stored) == 1
     assert isinstance(stored[0], api.Quarantine)
-    assert fake_redis.incr_calls == 1
+    assert fake_redis.eval_calls == 1
     assert fake_redis.lpush_calls == []
 
 
@@ -199,7 +369,7 @@ def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", FakeRedis())
     claim = demo_claim()
-    claim["statement"] = "✈" * 7_000
+    claim["statement"] = "\u2708" * 7_000
 
     response = client.post("/v1/claims", json=claim)
 
@@ -212,27 +382,66 @@ def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
 def test_invalid_claims_are_rate_limited_before_quarantine(monkeypatch):
     stored = []
     fake_redis = FakeRedis()
-    fake_redis.incr = lambda _key: api.settings.rate_limit_per_min + 1
+    fake_redis.eval = lambda *_args: [0, 6]
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", fake_redis)
 
     response = client.post("/v1/claims", json={"pnr": "bad"})
 
     assert response.status_code == 429
+    assert response.headers["retry-after"] == "6"
     assert stored == []
-    assert fake_redis.expire_calls == 1
     assert fake_redis.lpush_calls == []
 
 
-def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
+def test_token_bucket_allows_ten_and_rejects_the_eleventh():
+    fake_redis = FakeRedis()
+    decisions = [api.allow_run(fake_redis, "token-bucket-client", 10) for _ in range(11)]
+    assert all(allowed for allowed, _ in decisions[:10])
+    assert decisions[10] == (False, 6)
+
+
+def test_rate_limit_returns_service_unavailable_when_redis_is_down(monkeypatch):
+    class UnavailableRedis(FakeRedis):
+        def eval(self, *_args):
+            raise redis.RedisError("redis unavailable")
+
+    stored = []
+    fake_redis = UnavailableRedis()
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+        "client": ("203.0.113.17", 12345), "state": {"cid": "redis-outage"},
+    })
+
+    with pytest.raises(api.HTTPException) as exc_info:
+        api.submit_claim(api.ClaimIn.model_validate(demo_claim()), request)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "rate limiter unavailable"
+    assert stored == []
+    assert fake_redis.lpush_calls == []
+
+
+def test_source_ip_is_used_instead_of_caller_supplied_client_id():
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims",
+        "headers": [(b"x-client-id", b"spoofed-id")],
+        "client": ("203.0.113.17", 12345),
+    })
+
+    assert api._client_id(request) == "203.0.113.17"
+
+
+def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from worker import main as worker
-    from worker.agent.intake import LocalStructuredStubLLM
 
-    monkeypatch.setattr(worker, "get_llm", lambda: LocalStructuredStubLLM())
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -243,14 +452,26 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     monkeypatch.setattr(api, "r", fake_redis)
     monkeypatch.setattr(worker, "get_run", lambda _: stored[0])
     updates = []
-    monkeypatch.setattr(worker, "update_run", lambda *args, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(worker, "claim_run", lambda _run_id, now=None: 0)
+    monkeypatch.setattr(worker, "finish_run", lambda _run_id, attempt, **kwargs: (updates.append(kwargs) or True))
+    monkeypatch.setattr(worker, "heartbeat_run", lambda *_args, **_kwargs: True)
     response = client.post("/v1/claims", json=demo_claim(), headers={
         "traceparent": "00-12345678901234567890123456789012-1234567890123456-01",
         "x-correlation-id": "trace-test",
+        "x-prompt-version": "v2",
     })
     assert response.status_code == 202
     job = json.loads(fake_redis.lpush_calls[0][1])
     assert "traceparent" in job["trace_context"]
+    assert job["prompt_version"] == "v2"
+    seen_prompt_versions = []
+    original_run_agent = worker.run_agent
+
+    def capture_prompt_version(*args, **kwargs):
+        seen_prompt_versions.append(kwargs["prompt_version"])
+        return original_run_agent(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "run_agent", capture_prompt_version)
     worker.handle(job)
     spans = exporter.get_finished_spans()
     publish = next(span for span in spans if span.name == "queue.publish")
@@ -259,9 +480,11 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     assert consume.parent.span_id == publish.context.span_id
     assert consume.attributes["run_id"] == response.json()["run_id"]
     assert consume.attributes["correlation_id"] == "trace-test"
-    for name in ["agent.intake", "agent.research", "agent.verify", "agent.finalize", "tool.search_corpus"]:
+    for name in ["agent.intake", "agent.research", "agent.draft", "agent.verify", "agent.finalize",
+                 "tool.search_corpus", "tool.get_references", "tool.compute_compensation"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
     assert updates[-1]["status"] == "escalated"
+    assert seen_prompt_versions == ["v2"]
     assert "pnr" not in str([dict(s.attributes) for s in spans])
 
     def fail(*args, **kwargs):
@@ -272,4 +495,13 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch):
     failed_span = [s for s in exporter.get_finished_spans() if s.name == "queue.process"][-1]
     assert failed_span.status.status_code == trace.StatusCode.ERROR
     assert any(event.name == "exception" for event in failed_span.events)
-    assert updates[-1]["result"]["escalation_reason"] == "PROVIDER_DEGRADED"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["result"]["route"] == "escalate"
+    assert updates[-1]["error"] == worker.PUBLIC_WORKER_ERROR
+    assert "provider unavailable" in str(updates[-1]["trace"])
+    assert updates[-1]["finished_at"] is not None
+
+
+def test_submit_rejects_unknown_prompt_version():
+    response = client.post("/v1/claims", json=demo_claim(), headers={"x-prompt-version": "v3"})
+    assert response.status_code == 400

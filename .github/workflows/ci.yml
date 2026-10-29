@@ -1,8 +1,24 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TRIAGE_TEST_REDIS_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -10,3 +26,64 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run pytest -q
+  evaluation-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: triage
+          # Isolated CI database; no reusable credentials. Bind the port to loopback.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: triage
+        ports: ['127.0.0.1:5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U triage" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7.4.2-alpine
+        ports: ['127.0.0.1:6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://triage@localhost:5432/triage
+      REDIS_URL: redis://localhost:6379/0
+      LLM_PROVIDER: stub
+      LLM_BASE_URL: http://localhost:8001/v1
+      STUB_DELAY: '0'
+      RATE_LIMIT_PER_MIN: '1000'
+      OTEL_SDK_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --group evaluation
+      - name: Prepare corpus and start the actual API, provider stub, and worker
+        run: |
+          export CORPUS_DIR="$RUNNER_TEMP/eval-corpus"
+          echo "CORPUS_DIR=$CORPUS_DIR" >> "$GITHUB_ENV"
+          uv run python -m scripts.build_eval_fixture --output "$CORPUS_DIR"
+          uv run python -c "from triage_common.store import init_db; init_db()"
+          uv run uvicorn app:app --app-dir services/llm-stub --port 8001 > stub.log 2>&1 &
+          uv run uvicorn app.main:app --port 8000 > api.log 2>&1 &
+          uv run python -m worker.main > worker.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8000/readyz; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Evaluate all scenarios through HTTP and the real queue
+        run: >-
+          uv run python -m cli.evaluate --semantic off --corpus-dir "$CORPUS_DIR"
+          --report eval/results/eval-report.md --timeout 90 --poll-interval 0.1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-smoke
+          path: |
+            eval/results/
+            api.log
+            worker.log
+            stub.log
+

@@ -7,8 +7,11 @@ import json
 from pathlib import Path
 
 import chromadb
+import redis
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+from triage_common.cache import CORPUS_VERSION_KEY
 from triage_common.contracts import Chunk
+from triage_common.corpus_version import corpus_version_from_directory
 from triage_common.settings import settings
 
 INDEX_VERSION = "contextual-minilm-v1"
@@ -26,9 +29,14 @@ def load_chunks(path: Path) -> list[Chunk]:
 
 def record(chunk: Chunk) -> tuple[str, dict]:
     document = " > ".join([chunk.doc_id, *chunk.heading_path]) + "\n" + chunk.text
-    fingerprint = hashlib.sha256(chunk.model_dump_json().encode()).hexdigest()
+    embedding_hash = hashlib.sha256(document.encode()).hexdigest()
+    fingerprint_payload = json.dumps(
+        [chunk.model_dump(mode="json"), embedding_hash], sort_keys=True, separators=(",", ":")
+    )
+    fingerprint = hashlib.sha256(fingerprint_payload.encode()).hexdigest()
     return document, {
         "doc_id": chunk.doc_id, "clause_id": chunk.clause_id, "hash": chunk.hash,
+        "embedding_hash": embedding_hash,
         "fingerprint": fingerprint, "heading_path": json.dumps(chunk.heading_path),
         "page": chunk.page if chunk.page is not None else -1, "refs": json.dumps(chunk.refs),
     }
@@ -59,20 +67,42 @@ def sync(chunks: list[Chunk], target, batch_size: int = 64, *, force: bool = Fal
 
     This collection is owned by ingestion; serialize ingest jobs and run before consumers.
     """
-    existing = target.get(include=["metadatas"])
+    existing = target.get(include=["metadatas", "embeddings"])
     fingerprints = {key: (meta or {}).get("fingerprint")
                     for key, meta in zip(existing["ids"], existing["metadatas"], strict=True)}
+    embeddings_by_hash = {}
+    if not force and existing.get("embeddings") is not None:
+        for metadata, embedding in zip(existing["metadatas"], existing["embeddings"], strict=True):
+            if metadata and metadata.get("embedding_hash") and embedding is not None:
+                embeddings_by_hash[metadata["embedding_hash"]] = (
+                    embedding.tolist() if hasattr(embedding, "tolist") else embedding
+                )
     changed = [chunk for chunk in chunks
                if force or fingerprints.get(chunk.chunk_id) != record(chunk)[1]["fingerprint"]]
+    embedding_cache_hits = 0
     for start in range(0, len(changed), batch_size):
         batch = changed[start:start + batch_size]
         records = [record(chunk) for chunk in batch]
-        target.upsert(ids=[chunk.chunk_id for chunk in batch],
-                      documents=[item[0] for item in records], metadatas=[item[1] for item in records])
+        cached = [
+            (chunk, item, embeddings_by_hash.get(item[1]["embedding_hash"]))
+            for chunk, item in zip(batch, records, strict=True)
+        ]
+        reused = [(chunk, item, embedding) for chunk, item, embedding in cached if embedding is not None]
+        new = [(chunk, item) for chunk, item, embedding in cached if embedding is None]
+        if reused:
+            embedding_cache_hits += len(reused)
+            target.upsert(ids=[chunk.chunk_id for chunk, _, _ in reused],
+                          embeddings=[embedding for _, _, embedding in reused],
+                          documents=[item[0] for _, item, _ in reused],
+                          metadatas=[item[1] for _, item, _ in reused])
+        if new:
+            target.upsert(ids=[chunk.chunk_id for chunk, _ in new],
+                          documents=[item[0] for _, item in new], metadatas=[item[1] for _, item in new])
     stale = sorted(set(fingerprints) - {chunk.chunk_id for chunk in chunks})
     for start in range(0, len(stale), batch_size):
         target.delete(ids=stale[start:start + batch_size])
-    return {"count": target.count(), "upserted": len(changed), "deleted": len(stale)}
+    return {"count": target.count(), "upserted": len(changed), "deleted": len(stale),
+            "embedding_cache_hits": embedding_cache_hits}
 
 
 def verify(chunks: list[Chunk], target) -> dict:
@@ -97,6 +127,13 @@ def verify(chunks: list[Chunk], target) -> dict:
     return {"count": len(expected), "retrieved": matches["ids"][0]}
 
 
+def publish_corpus_version(client, processed_dir: Path) -> str:
+    """Publish the exact version fingerprint used by the worker's corpus loader."""
+    version = corpus_version_from_directory(processed_dir)
+    client.set(CORPUS_VERSION_KEY, version)
+    return version
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chunks", type=Path, default=Path("corpus/processed/chunks.jsonl"))
@@ -111,7 +148,15 @@ def main() -> None:
             target = client.get_collection(settings.chroma_collection, embedding_function=DefaultEmbeddingFunction())
             result = verify(chunks, target)
         else:
-            result = sync(chunks, collection(client, settings.chroma_collection), force=args.force)
+            result = sync(
+                chunks,
+                collection(client, settings.chroma_collection),
+                force=args.force or not settings.cache_enabled,
+            )
+            version = publish_corpus_version(
+                redis.Redis.from_url(settings.redis_url, decode_responses=True), args.chunks.parent
+            )
+            result["corpus_version"] = version
         print(json.dumps({"collection": settings.chroma_collection, **result}, sort_keys=True))
     except Exception as exc:
         parser.exit(1, f"index: {exc}\n")
