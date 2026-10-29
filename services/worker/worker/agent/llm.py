@@ -16,6 +16,8 @@ from ..metrics import LLM_BREAKER_STATE
 
 log = logging.getLogger(__name__)
 
+_GAUGE_REGISTERED: set[str] = set()
+
 _COMPLETE_PROBE_SCRIPT = """
 if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('del', KEYS[1], KEYS[2], KEYS[3])
@@ -48,7 +50,9 @@ class CircuitBreaker:
         self.open_key = f"llm:breaker:{name}:opened"
         self.probe_key = f"llm:breaker:{name}:probe"
         self.probe_token = None
-        LLM_BREAKER_STATE.labels(self.name).set_function(self._metric_state)
+        if name not in _GAUGE_REGISTERED:
+            LLM_BREAKER_STATE.labels(name).set_function(self._metric_state)
+            _GAUGE_REGISTERED.add(name)
 
     def _state(self) -> str:
         opened_at = self.client.get(self.open_key)
@@ -212,6 +216,11 @@ class ResilientLLM:
                     # Client/configuration errors will not improve by retrying the
                     # same model. Let the configured fallback try once instead.
                     status = exc.response.status_code
+                    if status in (401, 403):
+                        log.warning("LLM %s rejected credentials (HTTP %s); check the API key",
+                                    self.breaker.name, status)
+                        self.breaker.failure()
+                        raise CircuitOpen(f"primary auth failed HTTP {status}") from exc
                     if status != 429 and status < 500:
                         raise CircuitOpen(f"primary returned non-retryable HTTP {status}") from exc
                     if not retry_after_failure(attempt):

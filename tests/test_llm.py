@@ -132,6 +132,17 @@ def test_breaker_does_not_reset_open_window_on_later_failure():
     assert client.values[breaker.open_key] == opened_at
 
 
+def test_breaker_metric_keeps_first_registration_for_provider():
+    first = CircuitBreaker(1, 30, 30, client=FakeRedis(), name="registration-test")
+    second = CircuitBreaker(1, 30, 30, client=FakeRedis(), name="registration-test")
+    first.failure()
+
+    lines = generate_latest(LLM_BREAKER_STATE).decode().splitlines()
+    sample = next(line for line in lines if 'provider="registration-test"' in line)
+    assert float(sample.rsplit(" ", 1)[1]) == 1
+    assert second.state == "closed"
+
+
 def test_breaker_counts_failures_across_successful_requests():
     client = FakeRedis()
     breaker = CircuitBreaker(2, 30, 30, client=client)
@@ -263,7 +274,7 @@ def test_resilient_llm_uses_primary_without_fallback_when_primary_recovers(monke
     assert fallback.calls == 0
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404])
+@pytest.mark.parametrize("status", [400, 404, 422])
 def test_resilient_llm_does_not_retry_non_retryable_http_status(monkeypatch, status):
     monkeypatch.setattr("worker.agent.llm.settings.retry_max", 4)
     response = httpx.Response(status, request=httpx.Request("POST", "https://provider.test/chat"))
@@ -278,6 +289,27 @@ def test_resilient_llm_does_not_retry_non_retryable_http_status(monkeypatch, sta
     assert primary.calls == fallback.calls == 1
     assert breaker.state == "closed"
     assert not breaker.client.sorted.get(breaker.failures_key)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_resilient_llm_auth_errors_use_fallback_and_open_breaker(monkeypatch, caplog, status):
+    monkeypatch.setattr("worker.agent.llm.settings.retry_max", 4)
+    response = httpx.Response(status, request=httpx.Request("POST", "https://provider.test/chat"))
+    error = httpx.HTTPStatusError("credentials rejected", request=response.request, response=response)
+    breaker = CircuitBreaker(2, 30, 30, client=FakeRedis())
+    primary = StubLLM([error] * breaker.threshold)
+    fallback = StubLLM([{"content": "fallback"}] * (breaker.threshold + 1))
+    resilient = ResilientLLM(primary, fallback, breaker)
+
+    for call in range(breaker.threshold):
+        assert resilient.chat([])["content"] == "fallback"
+        assert primary.calls == fallback.calls == call + 1
+        assert breaker.state == ("open" if call + 1 == breaker.threshold else "closed")
+
+    assert f"LLM {breaker.name} rejected credentials (HTTP {status}); check the API key" in caplog.text
+    assert resilient.chat([])["content"] == "fallback"
+    assert primary.calls == breaker.threshold
+    assert fallback.calls == breaker.threshold + 1
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])

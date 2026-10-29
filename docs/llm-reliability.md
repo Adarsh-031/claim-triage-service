@@ -8,6 +8,8 @@ configured fallback model one attempt instead. When fallback is absent or fails,
 callers must escalate; provider failures must never be turned into confident claim
 answers.
 
+Worst-case primary latency ≈ `RETRY_MAX` × `LLM_TIMEOUT_S` + backoff (0.5, 1, 2… s, max 8 s + jitter), then one fallback call; all calls share the 60 s run deadline.
+
 The primary provider circuit breaker is shared across worker replicas through Redis.
 It opens after `BREAKER_FAIL_THRESHOLD` failures within `BREAKER_WINDOW_S`, even if
 successful calls occur between failures. While open it rejects primary calls and
