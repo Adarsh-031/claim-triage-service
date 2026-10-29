@@ -87,8 +87,9 @@ def _handle(job: dict) -> bool:
     heartbeat_thread.start()
     try:
         claim = dict(run.claim)
+        legacy_version = claim.pop("prompt_version", settings.prompt_version)
         client_scope = job.get("client_id", "unknown")
-        prompt_version = job.get("prompt_version", settings.prompt_version)
+        prompt_version = job.get("prompt_version", legacy_version)
         corpus_version = current_corpus_version(cache_redis)
         cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
         if settings.cache_enabled:

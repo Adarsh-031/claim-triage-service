@@ -51,8 +51,12 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
     assert updates[-1]["status"] == "escalated"
     assert updates[-1]["result"] == cached_result
     assert updates[-1]["trace"][0]["hit"] is True
+
+
 def tool_call(name, **arguments):
     return {"id": "test-tool", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+
+
 def test_s01_research_preserves_real_citations_and_requires_comparison_review():
     run_id = str(uuid4())
     result, trace = graph.run_agent(SCENARIO["claim"], "test-cid", run_id=run_id)
@@ -75,7 +79,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "v1"
+    assert result.prompt_version == "research-v1+v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
@@ -101,7 +105,37 @@ def test_technical_fault_escalates_conflict_with_car_and_airline_citations():
     assert "beyond the airline's control" in result.summary
 
 
+@pytest.mark.parametrize("prompt_version", ["v1", "v2"])
+
+
+def test_run_agent_preserves_requested_prompt_version(prompt_version):
+    result, trace = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
+    assert result.prompt_version == f"research-v1+{prompt_version}"
+    intake = next(t for t in trace if t["step"] == "intake")
+    assert intake["prompt_version"] == prompt_version
+
+
+@pytest.mark.parametrize("scenario_id", [
+    "s05_cancel_late_notice_no_alternate", "s29_cancel_late_notice_mid_block_cap",
+])
+
+
+def test_cancellation_gold_amount_matches_calculator_trace(scenario_id):
+    scenario = json.loads((SCENARIO_DIR / f"{scenario_id}.json").read_text())
+    _, trace = graph.run_agent(scenario["claim"])
+    draft = next(t for t in trace if t["step"] == "draft")
+    assert draft["compensation"]["status"] == "computed"
+    assert draft["compensation"]["amount"] == scenario["expected"]["compensation_inr"]
+
+
+def test_run_agent_rejects_unknown_prompt_version():
+    with pytest.raises(ValueError, match="prompt_version"):
+        graph.run_agent(SCENARIO["claim"], prompt_version="v3")
+
+
 @pytest.mark.parametrize("budget", ["steps", "tools"])
+
+
 def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
     calls = []
 
@@ -121,6 +155,8 @@ def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
 
 
 @pytest.mark.parametrize("budget", ["steps", "tools"])
+
+
 def test_real_tool_loop_exhausts_exact_budget(monkeypatch, budget):
     def looping_reply(messages, tools, **kwargs):
         calls = [tool_call("get_clause", clause_id="3.3.2")] * (1 if budget == "steps" else 20)
@@ -193,9 +229,9 @@ def test_unsupported_claim_escalates_instead_of_making_up_a_decision():
     assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
 
 
-
-
 @pytest.mark.parametrize("used,invoked,reserved", [(13, True, 14), (14, False, 15), (15, False, 15)])
+
+
 def test_research_reserves_before_each_tool(monkeypatch, used, invoked, reserved):
     provider = SimpleNamespace(chat=lambda *a, **kw: {
         "tool_calls": [tool_call("get_clause", clause_id="3.3.2")], "content": None,
@@ -209,6 +245,8 @@ def test_research_reserves_before_each_tool(monkeypatch, used, invoked, reserved
     assert execute.call_count == int(invoked)
     assert state["tool_calls"] == reserved
     assert state.get("budget_exceeded", False) is (not invoked)
+
+
 def test_terminal_step_reservation_skips_node_side_effects():
     node = Mock()
     state = {"started_at": graph.time.monotonic(), "step_count": 11, "tool_calls": 0}
@@ -237,6 +275,8 @@ def _mock_worker_store(monkeypatch):
 
 
 @pytest.mark.parametrize("budget_exhausted", [False, True])
+
+
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
     updates = _mock_worker_store(monkeypatch)
@@ -253,7 +293,7 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
     monkeypatch.setattr(worker_main.settings, "cache_enabled", False)
     assert worker_main.handle({"run_id": str(run_id), "cid": "worker-test",
-                               "prompt_version": "research-v1"}) is True
+                               "prompt_version": "v1"}) is True
     assert updates[0] == (run_id, {"status": RunStatus.running.value})
     assert updates[-1][0] == run_id
     final = updates[-1][1]
@@ -265,6 +305,8 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
 
 
 @pytest.mark.parametrize("route", [Route.DECLINE, Route.PAY, Route.REQUEST_EVIDENCE])
+
+
 def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, route):
     original = graph.make_draft
 
@@ -340,6 +382,8 @@ def test_missing_facilities_chunk_cannot_support_a_meals_draft(monkeypatch):
 
 
 @pytest.mark.parametrize("reply", [None, {"tool_calls": [None]}, {"tool_calls": "invalid"}])
+
+
 def test_malformed_provider_envelope_escalates(monkeypatch, reply):
     monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=lambda *a, **kw: reply))
     result, _ = graph.run_agent(SCENARIO["claim"])
@@ -357,6 +401,8 @@ def test_fabricated_comparison_citations_cannot_finish_research(monkeypatch):
 
 
 @pytest.mark.parametrize("status", ["compatible", "conflict"])
+
+
 def test_irrelevant_retrieved_citations_cannot_create_conflict_or_complete_research(monkeypatch, research_env, status):
     original_tool, original_chat = graph.execute_tool, research_env.chat
     car, airline = corpus.get_clause("3.3.2"), corpus.get_clause("10.2", "INDIGO-COC-DOM")
@@ -401,3 +447,22 @@ def test_relevant_citations_with_model_conflict_still_require_independent_review
     draft = next(t for t in trace if t["step"] == "draft")
     assert draft["checklist"]["airline_comparison"]["status"] == "missing"
     assert draft["route"] is Route.REQUEST_EVIDENCE
+
+
+@pytest.mark.parametrize("version", ["v1", "v2"])
+
+
+def test_selected_prompt_content_reaches_provider(monkeypatch, version):
+    seen = []
+
+    def chat(messages, tools, **kwargs):
+        seen.append(messages[0]["content"])
+        raise httpx.ConnectError("stop after observing real provider input")
+
+    monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=chat))
+    _, trace = graph.run_agent(SCENARIO["claim"], prompt_version=version)
+    expected = (graph.PROMPT_PATH.parent / f"{version}.md").read_text(encoding="utf-8")
+    other = (graph.PROMPT_PATH.parent / f"{'v2' if version == 'v1' else 'v1'}.md").read_text(encoding="utf-8")
+    assert expected in seen[0] and other not in seen[0]
+    intake = next(s for s in trace if s["step"] == "intake")
+    assert intake["prompt_version"] == version

@@ -95,7 +95,7 @@ def _rate_limit(client: str) -> tuple[bool, int] | None:
 async def quarantine_invalid(request: Request, exc: RequestValidationError):
     """Invalid claims are stored in quarantine with field-level errors; no agent run starts."""
     raw = await request.body()
-    body = raw[:RAW_BODY_LIMIT].decode("utf-8", errors="replace")
+    body = raw.decode("utf-8", errors="replace").encode("utf-8")[:RAW_BODY_LIMIT].decode("utf-8", errors="ignore")
     errors = [
         {
             "field": ".".join(map(str, error["loc"][1:])) or "body",
@@ -124,6 +124,9 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
 
 @app.post("/v1/claims", response_model=SubmitOut, status_code=202)
 def submit_claim(claim: ClaimIn, request: Request):
+    prompt_version = request.headers.get("x-prompt-version", settings.prompt_version)
+    if not re.fullmatch(r"v[12]", prompt_version):
+        raise HTTPException(400, "x-prompt-version must be 'v1' or 'v2'")
     with SUBMIT_LATENCY.time():
         rate_limit = _rate_limit(_client_id(request))
         if rate_limit is None:
@@ -133,9 +136,6 @@ def submit_claim(claim: ClaimIn, request: Request):
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": str(retry_after)})
         claim_data = claim.model_dump(mode="json")
         client_id = _client_id(request)
-        prompt_version = request.headers.get("x-prompt-version", settings.prompt_version)
-        if not re.fullmatch(r"v[12]", prompt_version):
-            raise HTTPException(400, "x-prompt-version must be 'v1' or 'v2'")
         if settings.cache_enabled:
             corpus_version = current_corpus_version(r)
             key = run_cache_key(claim_data, prompt_version, corpus_version, client_id)

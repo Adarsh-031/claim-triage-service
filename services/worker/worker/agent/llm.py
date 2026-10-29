@@ -1,14 +1,28 @@
 """Provider-agnostic LLM interface (swap by config). Timeouts, retries, circuit breaker (A5)."""
 from __future__ import annotations
 
+import logging
 import random
 import time
-from collections import deque
 from functools import lru_cache
 from typing import Protocol
+from uuid import uuid4
 
 import httpx
+import redis
 from triage_common.settings import settings
+
+from ..metrics import LLM_BREAKER_STATE
+
+log = logging.getLogger(__name__)
+
+_GAUGE_REGISTERED: set[str] = set()
+
+_COMPLETE_PROBE_SCRIPT = """
+if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('del', KEYS[1], KEYS[2], KEYS[3])
+return 1
+"""
 
 
 class LLM(Protocol):
@@ -21,32 +35,115 @@ class CircuitOpen(RuntimeError):
 
 
 class CircuitBreaker:
-    def __init__(self, threshold: int, window_s: float, reset_s: float):
+    """Redis-shared provider breaker; a single worker owns the half-open probe."""
+
+    def __init__(self, threshold: int, window_s: float, reset_s: float, client=None, name: str = "primary"):
         self.threshold, self.window_s, self.reset_s = threshold, window_s, reset_s
-        self.failures: deque[float] = deque()
-        self.opened_at: float | None = None
+        self.client = client or redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_timeout=1.0,
+            socket_connect_timeout=1.0,
+        )
+        self.name = name
+        self.failures_key = f"llm:breaker:{name}:failures"
+        self.open_key = f"llm:breaker:{name}:opened"
+        self.probe_key = f"llm:breaker:{name}:probe"
+        self.probe_token = None
+        if name not in _GAUGE_REGISTERED:
+            LLM_BREAKER_STATE.labels(name).set_function(self._metric_state)
+            _GAUGE_REGISTERED.add(name)
+
+    def _state(self) -> str:
+        opened_at = self.client.get(self.open_key)
+        if opened_at is None:
+            return "closed"
+        if time.time() - float(opened_at) < self.reset_s:
+            return "open"
+        return "half_open"
 
     @property
     def state(self) -> str:
-        if self.opened_at is None:
+        try:
+            return self._state()
+        except redis.RedisError:
+            log.warning("Redis unavailable while reading %s circuit state; treating breaker as closed", self.name)
             return "closed"
-        return "half_open" if time.time() - self.opened_at >= self.reset_s else "open"
+
+    def _metric_state(self) -> float:
+        try:
+            state = self._state()
+        except redis.RedisError:
+            log.warning("Redis unavailable while scraping %s circuit state", self.name)
+            return 0
+        return float({"closed": 0, "open": 1, "half_open": 2}[state])
 
     def before(self) -> None:
-        if self.state == "open":
+        probe_acquired = False
+        try:
+            state = self._state()
+            if state == "half_open":
+                token = uuid4().hex
+                acquired = self.client.set(
+                    self.probe_key, token, nx=True,
+                    px=max(1000, int((settings.llm_timeout_s + 5) * 1000)),
+                )
+                if acquired:
+                    self.probe_token = token
+                    probe_acquired = True
+        except redis.RedisError:
+            log.warning("Redis unavailable before %s call; treating breaker as closed", self.name)
+            return
+        if state == "open":
             raise CircuitOpen("provider circuit open")
+        if state == "half_open" and not probe_acquired:
+            raise CircuitOpen("provider circuit half-open probe already in progress")
 
     def success(self) -> None:
-        self.failures.clear()
-        self.opened_at = None
+        # A success from a request admitted while closed must not erase the
+        # rolling failure window or close a breaker another worker opened.
+        # Only the current half-open probe may reset that shared state.
+        if not self.probe_token:
+            return
+        try:
+            self.client.eval(
+                _COMPLETE_PROBE_SCRIPT, 3, self.probe_key, self.failures_key, self.open_key, self.probe_token,
+            )
+        except redis.RedisError:
+            log.warning("Redis unavailable after successful %s call; breaker state may be stale", self.name)
+        finally:
+            self.probe_token = None
 
     def failure(self) -> None:
-        now = time.time()
-        self.failures.append(now)
-        while self.failures and now - self.failures[0] > self.window_s:
-            self.failures.popleft()
-        if self.state == "half_open" or len(self.failures) >= self.threshold:
-            self.opened_at = now
+        try:
+            now = time.time()
+            state = self._state()
+            pipeline = self.client.pipeline()
+            pipeline.zremrangebyscore(self.failures_key, "-inf", now - self.window_s)
+            pipeline.zadd(self.failures_key, {f"{now}:{uuid4().hex}": now})
+            pipeline.expire(self.failures_key, max(1, int(self.window_s) + 1))
+            pipeline.zcard(self.failures_key)
+            count = pipeline.execute()[-1]
+            if state == "half_open":
+                self.client.set(self.open_key, str(now), ex=max(1, int(self.reset_s) + 3600))
+            elif state == "closed" and count >= self.threshold:
+                self.client.set(self.open_key, str(now), ex=max(1, int(self.reset_s) + 3600), nx=True)
+        except redis.RedisError:
+            log.warning("Redis unavailable after failed %s call; treating breaker as closed", self.name)
+        finally:
+            self._release_probe()
+
+    def _release_probe(self) -> None:
+        if self.probe_token:
+            try:
+                self.client.eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
+                    1, self.probe_key, self.probe_token,
+                )
+            except redis.RedisError:
+                log.warning("Redis unavailable while releasing %s half-open probe", self.name)
+            finally:
+                self.probe_token = None
 
 
 class OpenAICompatibleLLM:
@@ -80,10 +177,13 @@ class OpenAICompatibleLLM:
 class ResilientLLM:
     """primary -> (retries w/ backoff+jitter) -> breaker -> fallback model -> raise (caller escalates)."""
 
-    def __init__(self, primary: LLM, fallback: LLM | None):
+    def __init__(self, primary: LLM, fallback: LLM | None, breaker: CircuitBreaker | None = None,
+                 provider_name: str | None = None):
         self.primary, self.fallback = primary, fallback
-        self.breaker = CircuitBreaker(settings.breaker_fail_threshold, settings.breaker_window_s,
-                                      settings.breaker_reset_s)
+        self.breaker = breaker or CircuitBreaker(
+            settings.breaker_fail_threshold, settings.breaker_window_s, settings.breaker_reset_s,
+            name=provider_name or settings.llm_provider,
+        )
 
     def chat(self, messages, tools=None, *, timeout_s=None):
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
@@ -96,6 +196,15 @@ class ResilientLLM:
                 raise httpx.TimeoutException("Research run deadline exhausted")
             return left
 
+        def retry_after_failure(attempt: int) -> bool:
+            self.breaker.failure()
+            left = remaining()
+            if self.breaker.state != "closed" or attempt + 1 >= settings.retry_max:
+                return False
+            delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
+            time.sleep(min(delay, left) if left is not None else delay)
+            return True
+
         try:
             self.breaker.before()
             for attempt in range(settings.retry_max):
@@ -103,11 +212,22 @@ class ResilientLLM:
                     out = self.primary.chat(messages, tools, timeout_s=remaining())
                     self.breaker.success()
                     return out
+                except httpx.HTTPStatusError as exc:
+                    # Client/configuration errors will not improve by retrying the
+                    # same model. Let the configured fallback try once instead.
+                    status = exc.response.status_code
+                    if status in (401, 403):
+                        log.warning("LLM %s rejected credentials (HTTP %s); check the API key",
+                                    self.breaker.name, status)
+                        self.breaker.failure()
+                        raise CircuitOpen(f"primary auth failed HTTP {status}") from exc
+                    if status != 429 and status < 500:
+                        raise CircuitOpen(f"primary returned non-retryable HTTP {status}") from exc
+                    if not retry_after_failure(attempt):
+                        break
                 except (httpx.HTTPError, KeyError):
-                    self.breaker.failure()
-                    delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
-                    left = remaining()
-                    time.sleep(min(delay, left) if left is not None else delay)
+                    if not retry_after_failure(attempt):
+                        break
             raise CircuitOpen("primary exhausted retries")
         except CircuitOpen:
             if self.fallback is None:
@@ -120,7 +240,8 @@ def get_llm() -> LLM:
     if settings.llm_provider == "stub":
         # The default is a local HTTP service, so callers exercise the same
         # OpenAI-compatible request/response path as a real provider.
-        return OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model_primary or "stub")
+        primary = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_model_primary or "stub")
+        return ResilientLLM(primary, None, provider_name=settings.llm_provider)
 
     if settings.llm_provider != "openrouter":
         raise ValueError("LLM_PROVIDER must be 'stub' or 'openrouter'")
@@ -140,4 +261,4 @@ def get_llm() -> LLM:
         settings.llm_model_primary,
         settings.openrouter_api_key,
     )
-    return ResilientLLM(primary, fallback)
+    return ResilientLLM(primary, fallback, provider_name=settings.llm_provider)

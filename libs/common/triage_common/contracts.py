@@ -67,6 +67,12 @@ class ClaimIn(BaseModel):
     stated_cause: str | None = Field(default=None, max_length=300)
     alternate: AlternateFlight | None = None
     ticket_fare_inr: float | None = Field(default=None, ge=0, le=1_000_000)
+    # Separate statutory calculator inputs. Never infer these from total ticket fare.
+    one_way_basic_fare_inr: float | None = Field(default=None, ge=0, le=1_000_000)
+    airline_fuel_charge_inr: float | None = Field(default=None, ge=0, le=1_000_000)
+    sector: Literal["domestic", "international"] | None = None
+    distance_km: int | None = Field(default=None, ge=0, le=100_000)
+    ticket_cost_including_taxes_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     statement: str = Field(min_length=10, max_length=4000, description="Passenger's own account")
 
     @field_validator("statement", "stated_cause")

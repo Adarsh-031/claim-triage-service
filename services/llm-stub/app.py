@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 
 def _configured_delay() -> float:
@@ -19,6 +19,8 @@ def _configured_delay() -> float:
 
 
 STUB_DELAY = _configured_delay()
+STUB_MODE = os.getenv("STUB_MODE", "normal").strip().lower()
+STUB_SLOW_DELAY = max(STUB_DELAY, float(os.getenv("STUB_SLOW_DELAY", "30")))
 STUB_REPLY = "STUB"
 app = FastAPI(title="LLM Stub", version="1.0.0")
 
@@ -81,7 +83,14 @@ def healthz() -> dict[str, str]:
 @app.post("/v1/chat/completions")
 async def chat_completions(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a stable response matching the OpenAI Chat Completions schema."""
-    await asyncio.sleep(STUB_DELAY)
+    if STUB_MODE == "error":
+        raise HTTPException(status_code=503, detail="fault injection: provider unavailable")
+    if STUB_MODE == "slow":
+        await asyncio.sleep(STUB_SLOW_DELAY)
+    elif STUB_MODE == "normal":
+        await asyncio.sleep(STUB_DELAY)
+    else:
+        raise HTTPException(status_code=500, detail="STUB_MODE must be normal, error, or slow")
     tools = {tool.get("function", {}).get("name") for tool in payload.get("tools", [])}
     message = (research_reply(payload.get("messages", [])) if "compute_compensation" in tools
                else {"role": "assistant", "content": STUB_REPLY})
