@@ -239,7 +239,10 @@ def test_narrative_is_withheld_from_provider(research_env, monkeypatch):
         return original(messages, *args, **kwargs)
 
     monkeypatch.setattr(research_env, "chat", inspect)
-    graph.run_agent({"disruption_type": "unknown", "statement": "UNTRUSTED_INSTRUCTION_SENTINEL"})
+    claim = json.loads((graph.PROMPT_PATH.parents[1] / "eval/scenarios/s01_demo_cancellation_alternate_taken.json")
+                       .read_text())["claim"]
+    graph.run_agent({**claim, "statement": "UNTRUSTED_INSTRUCTION_SENTINEL"})
+    assert contents
     assert all("UNTRUSTED_INSTRUCTION_SENTINEL" not in content for content in contents)
 
 
@@ -249,7 +252,7 @@ def test_booking_identifiers_absent_from_every_provider_turn(research_env, monke
     claim = json.loads((graph.PROMPT_PATH.parents[1] / "eval/scenarios/s01_demo_cancellation_alternate_taken.json")
                        .read_text())["claim"]
     private = {name: f"PRIVATE_{name}_SENTINEL" for name in
-               ("pnr", "flight_number", "flight_date", "origin", "destination", "statement", "future_private_field")}
+               ("pnr", "flight_number", "flight_date", "destination", "statement", "future_private_field")}
     claim.update(private)
     claim["alternate"]["pnr"] = "PRIVATE_ALTERNATE_SENTINEL"
 
@@ -263,7 +266,7 @@ def test_booking_identifiers_absent_from_every_provider_turn(research_env, monke
     for request in requests:
         assert all(value not in request for value in [*private.values(), "PRIVATE_ALTERNATE_SENTINEL"])
     facts = json.loads(json.loads(requests[0])[1]["content"])["claim"]
-    assert not set(private) & facts.keys()
+    assert not (set(private) | {"origin"}) & facts.keys()
     assert "pnr" not in facts["alternate"]
 
 
@@ -284,7 +287,7 @@ def test_private_claim_tool_errors_never_disclose_values_on_next_provider_turn(m
         return {"content": json.dumps({"comparison": {"status": "missing"}})}
 
     monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=reply))
-    graph.run_agent({**dict.fromkeys(names, "PRIVATE_SENTINEL"), "airline_code": "6E",
+    graph.run_agent({**dict.fromkeys(names, "PRIVATE_SENTINEL"), "airline_code": "6E", "origin": "BLR",
                      "alternate": {"pnr": "PRIVATE_SENTINEL"}, "disruption_type": "cancellation"})
     assert len(requests) == 2
     assert all("PRIVATE_SENTINEL" not in request for request in requests)

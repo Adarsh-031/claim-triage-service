@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import httpx
 
@@ -31,7 +32,8 @@ def test_quarantine_scenario_is_scored_without_creating_a_run(tmp_path):
     transport = httpx.MockTransport(
         lambda request: httpx.Response(422, json={"errors": [], "quarantine_id": "persisted-id"}))
     with httpx.Client(transport=transport) as client:
-        result = run_scenario(client, "http://api", "eval/scenarios/s02_malformed_quarantine.json", "v1", 0)
+        scenario = Path(__file__).parents[1] / "eval/scenarios/s02_malformed_quarantine.json"
+        result = run_scenario(client, "http://api", scenario, "v1", 0)
     assert result["actual_route"] == "quarantine"
     assert result["route_correct"] is True
 

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     airline_code: str = ""
     corpus_dir: str = ""  # Defaults to <repo>/corpus/processed; mounted read-only in workers.
     research_prompt_path: str = ""  # Container image sets an absolute path for its installed package.
+    intake_prompt_path: str = ""  # Installed workers cannot rely on repository-relative paths.
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     redis_url: str = "redis://redis:6379/0"

@@ -7,12 +7,26 @@ Conditional edges continue research, draft when the provider finishes, or finali
 escalation on an exhausted budget or unavailable corpus/provider. The draft node also
 routes provision conflicts directly to finalization.
 
+The `intake-v1` stage extracts disruption, notice/block time, alternate offered/accepted,
+contact availability, and stated cause from the narrative and form. Non-null form fields
+take precedence; disagreements are retained in the intake trace. Invalid output gets one
+validation retry within the remaining run deadline, then escalates. Provider failures use
+`PROVIDER_DEGRADED`; unsupported origins use `OUT_OF_CORPUS` before any provider or retrieval
+call. Research checklists, claim-field tools and compensation all use a reconciled copy
+of the claim, preserving booking/fare data and alternate departure timing locally.
+
+Intake sends only extraction fields and the narrative to the provider. With `LLM_PROVIDER=stub`,
+intake uses a deterministic in-process form reader; research still uses the HTTP stub.
+Narrative extraction/conflict tests inject scripted intake responses. Provider objects stay
+outside graph state. Results identify both stages and the selected research variant as
+`intake-v1+research-v1+v1` (or `+v2`).
+
 Intake supplies an explicit allowlist of eligibility facts and a data checklist:
 airline code, disruption type, block time, notice and delay durations, airport reporting,
 contact-info availability, stated cause, and alternate offered/accepted/departure delay.
 The claim-field tool enforces the same allowlist, including filtering the entire alternate
 object. Booking PNR, flight number/date, origin/destination, total fare, narrative, and
-new unlisted fields stay local. The model chooses
+new unlisted fields stay local during research. The model chooses
 retrieval tools; it cannot replace structured facts, waive checklist coverage, supply
 calculator inputs, or set the output amount. The versioned instructions are in
 `prompts/research_v1.md` (`prompt_version=research-v1`).
@@ -106,6 +120,8 @@ Compose mounts the ingested corpus read-only into workers after ingestion succee
 The worker image copies the prompt and configures absolute corpus/prompt paths because
 its Python package is installed outside `/src`. `CORPUS_DIR` can override the processed
 artifact directory; `RESEARCH_PROMPT_PATH` can override the prompt file for local runs.
+`INTAKE_PROMPT_PATH` selects the intake prompt; the worker image sets it to
+`/src/prompts/intake_v1.md` so installed packages can load the asset.
 
 ```sh
 uv run ruff check .

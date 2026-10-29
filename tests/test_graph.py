@@ -83,7 +83,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "research-v1+v1"
+    assert result.prompt_version == "intake-v1+research-v1+v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
@@ -112,7 +112,7 @@ def test_technical_fault_escalates_conflict_with_car_and_airline_citations():
 @pytest.mark.parametrize("prompt_version", ["v1", "v2"])
 def test_run_agent_preserves_requested_prompt_version(prompt_version):
     result, trace = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
-    assert result.prompt_version == f"research-v1+{prompt_version}"
+    assert result.prompt_version == f"intake-v1+research-v1+{prompt_version}"
     intake = next(t for t in trace if t["step"] == "intake")
     assert intake["prompt_version"] == prompt_version
 
@@ -222,7 +222,7 @@ def test_expired_run_skips_all_work_nodes(monkeypatch):
 
 def test_unsupported_claim_escalates_instead_of_making_up_a_decision():
     result, _ = graph.run_agent({**SCENARIO["claim"], "disruption_type": "unknown"})
-    assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
+    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
 
 
 @pytest.mark.parametrize("used,invoked,reserved", [(13, True, 14), (14, False, 15), (15, False, 15)])
@@ -465,3 +465,94 @@ def test_selected_prompt_content_reaches_provider(monkeypatch, version):
     assert expected in seen[0] and other not in seen[0]
     intake = next(s for s in trace if s["step"] == "intake")
     assert intake["prompt_version"] == version
+
+
+def test_prompt_injection_cannot_change_route_or_create_amount():
+    scenario_path = Path(__file__).parents[1] / "eval/scenarios/s23_statement_prompt_injection.json"
+    claim = json.loads(scenario_path.read_text())["claim"]
+
+    class HostileLLM:
+        def chat(self, messages, tools=None, **kwargs):
+            return {"content": json.dumps({
+                "disruption_type": "delay", "notice_minutes_before_departure": None,
+                "block_time_minutes": None, "alternate_offered": None, "alternate_accepted": None,
+                "contact_details_given": None, "stated_cause": None,
+            })}
+
+    result, trace = graph.run_agent(claim, llm=HostileLLM())
+    assert result.route is Route.ESCALATE
+    assert result.amount is None
+    intake_trace = next(item for item in trace if item["step"] == "intake")
+    assert intake_trace["facts"]["disruption_type"] == "cancellation"
+    assert "400%" not in str(intake_trace["facts"])
+
+
+def test_vietnam_route_is_escalated_before_retrieval():
+    scenario_path = Path(__file__).parents[1] / "eval/scenarios/s22_vietnam_route_out_of_corpus.json"
+    claim = json.loads(scenario_path.read_text())["claim"]
+    result, trace = graph.run_agent(claim)
+    assert result.route is Route.ESCALATE
+    assert result.escalation_reason is EscalationReason.OUT_OF_CORPUS
+    assert trace[-1]["step"] == "finalize"
+    assert not any(entry["step"] == "research" for entry in trace)
+    intake = next(item for item in trace if item["step"] == "intake")
+    assert intake["corpus_version"] == result.corpus_version == corpus.get_corpus().version
+
+
+def test_narrative_facts_reach_research_tools_checklist_and_calculator():
+    scenario = json.loads((SCENARIO_DIR / "s29_cancel_late_notice_mid_block_cap.json").read_text())
+    claim = {**scenario["claim"], "disruption_type": "unknown", "notice_minutes_before_departure": None,
+             "block_time_minutes": None, "contact_info_provided": None, "alternate": None}
+
+    class NarrativeLLM:
+        def chat(self, messages, **kwargs):
+            return {"content": json.dumps({
+                "disruption_type": "cancellation", "notice_minutes_before_departure": 120,
+                "block_time_minutes": 90, "alternate_offered": False, "alternate_accepted": False,
+                "contact_details_given": True,
+            })}
+
+    result, trace = graph.run_agent(claim, llm=NarrativeLLM())
+    draft = next(item for item in trace if item["step"] == "draft")
+    assert draft["compensation"]["status"] == "computed"
+    assert draft["compensation"]["amount"] == 7500
+    assert draft["checklist"]["notice_period"]["missing_fields"] == []
+    assert draft["checklist"]["alternate_offered_accepted"]["missing_fields"] == []
+    assert draft["checklist"]["contact_details"]["missing_fields"] == []
+    assert result.route is Route.ESCALATE and result.amount is None
+    assert claim["disruption_type"] == "unknown" and claim["alternate"] is None
+    assert graph._INTAKE_LLM.get() is None
+    json.dumps(trace)
+
+
+def test_hostile_intake_output_cannot_add_a_route_or_amount():
+    class HostileLLM:
+        calls = 0
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            return {"content": json.dumps({"disruption_type": "cancellation", "amount": 400000,
+                                          "route": "pay_as_computed"})}
+
+    llm = HostileLLM()
+    result, trace = graph.run_agent(SCENARIO["claim"], llm=llm)
+    assert llm.calls == 2
+    assert result.route is Route.ESCALATE and result.amount is None
+    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
+    assert [item["step"] for item in trace] == ["start", "intake", "finalize"]
+    assert trace[1]["corpus_version"] == result.corpus_version == corpus.get_corpus().version
+    assert graph._INTAKE_LLM.get() is None
+    # A subsequent run must not reuse the failing injected provider.
+    _, next_trace = graph.run_agent(SCENARIO["claim"])
+    assert any(item["step"] == "research" for item in next_trace)
+
+
+def test_intake_provider_outage_escalates_before_research():
+    class Unavailable:
+        def chat(self, messages, **kwargs):
+            raise httpx.ConnectError("offline")
+
+    result, trace = graph.run_agent(SCENARIO["claim"], llm=Unavailable())
+    assert result.escalation_reason is EscalationReason.PROVIDER_DEGRADED
+    assert result.amount is None
+    assert not any(item["step"] == "research" for item in trace)

@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from contextlib import suppress
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from uuid import uuid4
@@ -16,11 +18,16 @@ from triage_common.settings import settings
 
 from ..metrics import NODE_LATENCY
 from ..tools.corpus import get_corpus
+from .intake import (
+    PROMPT_VERSION as INTAKE_PROMPT_VERSION,
+)
+from .intake import IntakeError, LocalStructuredStubLLM, extract_intake, is_in_scope_route, reconcile_claim
 from .llm import CircuitOpen, get_llm
 from .research import TOOLS, checklist, collect_chunks, execute_tool, make_draft, research_facts, validate_report
 
 PROMPT_VERSION = "research-v1"
 PROMPT_PATH = Path(__file__).resolve().parents[4] / "prompts" / "research_v1.md"
+_INTAKE_LLM: ContextVar[object | None] = ContextVar("intake_llm", default=None)
 
 
 def _log(state: RunState, step: str, **detail: object) -> None:
@@ -58,11 +65,46 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
 
 
 def intake(state: RunState) -> RunState:
-    # Share only eligibility facts; booking identifiers and the narrative stay local.
     state.setdefault("prompt_version", "v1")
+    state.setdefault("corpus_version", "unavailable")
+    claim = state["claim"]
+    extracted = None
+    if not is_in_scope_route(str(claim.get("origin") or "")):
+        state["draft"] = {
+            "route": Route.ESCALATE,
+            "summary": "The route is outside the India-focused source corpus. Routed to a human officer.",
+            "escalation_reason": EscalationReason.OUT_OF_CORPUS,
+        }
+    else:
+        try:
+            llm = _INTAKE_LLM.get()
+            if llm is None:
+                llm = LocalStructuredStubLLM() if settings.llm_provider == "stub" else get_llm()
+            remaining = settings.agent_run_timeout_s - (time.monotonic() - state["started_at"])
+            facts = extract_intake(claim, llm=llm, timeout_s=remaining)
+            # Research tools, checklists and calculations must see the same reconciled facts.
+            state["claim"] = reconcile_claim(claim, facts)
+            extracted = facts.model_dump()
+        except IntakeError as exc:
+            state["draft"] = {
+                "route": Route.ESCALATE,
+                "summary": "Claim intake could not be validated safely. Routed to a human officer.",
+                "escalation_reason": exc.reason,
+            }
+    # Research receives only eligibility facts, without booking identifiers or narrative.
     state["facts"] = research_facts(state["claim"])
     state["retrieved"] = []
     state["checklist"] = checklist(state)
+    if state.get("draft"):
+        # Early referrals still identify the deployed corpus for evaluation/provenance.
+        # Resolve local corpus identity without retrieving evidence or calling a provider.
+        with suppress(OSError, ValueError):
+            state["corpus_version"] = get_corpus().version
+    _log(state, "intake", facts=extracted if extracted is not None else state["facts"],
+         prompt_version=state["prompt_version"], intake_prompt_version=INTAKE_PROMPT_VERSION,
+         corpus_version=state["corpus_version"])
+    if state.get("draft") or _budget_exceeded(state):
+        return state
     try:
         state["corpus_version"] = get_corpus().version
         prompt_path = Path(settings.research_prompt_path) if settings.research_prompt_path else PROMPT_PATH
@@ -74,8 +116,7 @@ def intake(state: RunState) -> RunState:
     except (OSError, ValueError, KeyError):
         state["draft"] = {"route": Route.ESCALATE, "escalation_reason": EscalationReason.OUT_OF_CORPUS,
                           "summary": "Processed corpus or research prompt unavailable. Human review required."}
-    _log(state, "intake", disruption_type=state["facts"].get("disruption_type"),
-         prompt_version=state["prompt_version"], corpus_version=state["corpus_version"])
+    state["trace"][-1]["corpus_version"] = state["corpus_version"]
     return state
 
 
@@ -215,7 +256,8 @@ def finalize(state: RunState) -> RunState:
             "citations": draft.get("citations", []),
         }
     result = Result(
-        **draft, run_id=state["run_id"], prompt_version=f"{PROMPT_VERSION}+{state['prompt_version']}",
+        **draft, run_id=state["run_id"],
+        prompt_version=f"{INTAKE_PROMPT_VERSION}+{PROMPT_VERSION}+{state['prompt_version']}",
         corpus_version=state["corpus_version"],
     )
     state["result"] = result.model_dump(mode="json")
@@ -258,15 +300,20 @@ def run_agent(
     *,
     run_id: str | None = None,
     prompt_version: str = "v1",
+    llm=None,
 ) -> tuple[Result, list[dict]]:
     if prompt_version not in {"v1", "v2"}:
         raise ValueError("prompt_version must be 'v1' or 'v2'")
-    out = GRAPH.invoke(
-        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
-         "corpus_version": "unavailable", "started_at": time.monotonic(),
-         "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
-        # Allow finalization after the last permitted work step; LangGraph's
-        # recursion guard remains a second safety net, not the budget mechanism.
-        {"recursion_limit": settings.agent_max_steps + 2},
-    )
+    # Provider objects stay outside serializable graph state and are reset after each run.
+    token = _INTAKE_LLM.set(llm)
+    try:
+        out = GRAPH.invoke(
+            {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
+             "corpus_version": "unavailable", "started_at": time.monotonic(),
+             "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
+            # Finalization remains possible after the last permitted work step.
+            {"recursion_limit": settings.agent_max_steps + 2},
+        )
+    finally:
+        _INTAKE_LLM.reset(token)
     return Result.model_validate(out["result"]), out.get("trace", [])
