@@ -19,12 +19,14 @@ LangGraph tool. The current graph uses demo corpus fixtures and routes claims to
 review because grounding verification is not implemented; its outputs must not be
 presented as a completed claim determination.
 
-The current `ClaimIn`/web form captures `ticket_fare_inr` and a nested `alternate`
-object. It does not capture the separate one-way basic fare and fuel charge needed by
-3.3.2/3.2.2, cancellation notice/offer/refund facts, the passenger's denied-boarding
+The `ClaimIn` API contract captures `ticket_fare_inr`, separate optional one-way
+basic fare and airline fuel charge, downgrade sector/distance/ticket cost, and a nested
+`alternate` object. Web form coverage of the new monetary inputs may lag the API.
+Do not derive basic fare/fuel from the total ticket fare, since it
+also may include taxes and fees. Other not-yet-collected facts include cancellation
+offer/refund facts, the passenger's denied-boarding
 choice and alternate departure delay, or downgrade sector, distance, and ticket cost
-including taxes. Do not derive basic fare/fuel from the total ticket fare, since it
-also may include taxes and fees. Until each required fact is collected explicitly,
+including taxes. Until each required fact is collected explicitly,
 the calculator returns `needs_evidence` for the missing fields.
 
 ### Calculator input keys
@@ -102,3 +104,4 @@ and (for international travel) distance must be supplied.
 The notice thresholds are tested at exactly 14 days (20,160 minutes) and 24 hours
 (1,440 minutes). The international distance bands are implemented without overlap: exactly 1,500 km is
 in the 30% band, and exactly 3,500 km is in the 50% band.
+

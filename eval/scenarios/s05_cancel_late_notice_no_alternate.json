@@ -4,10 +4,13 @@
   "claim": {
     "pnr": "CA005A", "airline_code": "6E", "flight_number": "6E505",
     "flight_date": "2026-11-16", "origin": "MAA", "destination": "CCU",
-    "block_time_minutes": 150, "ticket_fare_inr": 8000, "disruption_type": "cancellation",
+    "block_time_minutes": 150, "ticket_fare_inr": 7200,
+    "one_way_basic_fare_inr": 6000, "airline_fuel_charge_inr": 500,
+    "disruption_type": "cancellation",
     "notice_minutes_before_departure": 120, "reported_at_airport": true,
-    "contact_info_provided": true, "alternate": null,
+    "contact_info_provided": true, "alternate": {"offered": false, "accepted": false},
     "statement": "The airline cancelled my flight two hours before departure, offered no alternate flight, and I had already checked in at the airport. I request the applicable remedy."
   },
-  "expected": {"route": "pay_as_computed", "must_cite": ["3.3.1", "3.3.2"]}
+  "expected": {"route": "pay_as_computed", "compensation_inr": 6500, "must_cite": ["3.3.1", "3.3.2"]}
 }
+

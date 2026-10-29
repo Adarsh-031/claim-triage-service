@@ -59,6 +59,7 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
 
 def intake(state: RunState) -> RunState:
     # Share only eligibility facts; booking identifiers and the narrative stay local.
+    state.setdefault("prompt_version", "v1")
     state["facts"] = research_facts(state["claim"])
     state["retrieved"] = []
     state["checklist"] = checklist(state)
@@ -66,13 +67,15 @@ def intake(state: RunState) -> RunState:
         state["corpus_version"] = get_corpus().version
         prompt_path = Path(settings.research_prompt_path) if settings.research_prompt_path else PROMPT_PATH
         state["messages"] = [
-            {"role": "system", "content": prompt_path.read_text(encoding="utf-8")},
+            {"role": "system", "content": prompt_path.read_text(encoding="utf-8") + "\n\n" +
+             (prompt_path.parent / f"{state['prompt_version']}.md").read_text(encoding="utf-8")},
             {"role": "user", "content": json.dumps({"claim": state["facts"], "checklist": state["checklist"]})},
         ]
     except (OSError, ValueError, KeyError):
         state["draft"] = {"route": Route.ESCALATE, "escalation_reason": EscalationReason.OUT_OF_CORPUS,
                           "summary": "Processed corpus or research prompt unavailable. Human review required."}
-    _log(state, "intake", disruption_type=state["facts"].get("disruption_type"))
+    _log(state, "intake", disruption_type=state["facts"].get("disruption_type"),
+         prompt_version=state["prompt_version"], corpus_version=state["corpus_version"])
     return state
 
 
@@ -212,7 +215,7 @@ def finalize(state: RunState) -> RunState:
             "citations": draft.get("citations", []),
         }
     result = Result(
-        **draft, run_id=state["run_id"], prompt_version=state["prompt_version"],
+        **draft, run_id=state["run_id"], prompt_version=f"{PROMPT_VERSION}+{state['prompt_version']}",
         corpus_version=state["corpus_version"],
     )
     state["result"] = result.model_dump(mode="json")
@@ -249,9 +252,17 @@ def build_graph():
 GRAPH = build_graph()
 
 
-def run_agent(claim: dict, correlation_id: str = "", *, run_id: str | None = None) -> tuple[Result, list[dict]]:
+def run_agent(
+    claim: dict,
+    correlation_id: str = "",
+    *,
+    run_id: str | None = None,
+    prompt_version: str = "v1",
+) -> tuple[Result, list[dict]]:
+    if prompt_version not in {"v1", "v2"}:
+        raise ValueError("prompt_version must be 'v1' or 'v2'")
     out = GRAPH.invoke(
-        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": PROMPT_VERSION,
+        {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
          "corpus_version": "unavailable", "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's

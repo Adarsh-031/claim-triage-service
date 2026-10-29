@@ -85,7 +85,10 @@ def _handle(job: dict) -> bool:
     heartbeat_thread.start()
     try:
         try:
-            result, trace = run_agent(run.claim, correlation_id=job.get("cid", ""), run_id=str(run_id))
+            claim = dict(run.claim)
+            legacy_version = claim.pop("prompt_version", "v1")
+            result, trace = run_agent(claim, correlation_id=job.get("cid", ""), run_id=str(run_id),
+                                      prompt_version=job.get("prompt_version", legacy_version))
             rec = Recommendation(
                 route=result.route,
                 summary=result.summary,

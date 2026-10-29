@@ -43,7 +43,7 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
         assert citation.doc_id == chunk["doc_id"]
         assert citation.quote in chunk["text"]
         assert not citation.chunk_id.startswith("DEMO")
-    assert result.prompt_version == "research-v1"
+    assert result.prompt_version == "research-v1+v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
     assert trace[-1]["step_count"] == 8
@@ -67,6 +67,30 @@ def test_technical_fault_escalates_conflict_with_car_and_airline_citations():
     assert {c.clause_id for c in result.citations} == {"1.4", "1.1"}
     assert all(c.quote in corpus.get_corpus().chunks[c.chunk_id]["text"] for c in result.citations)
     assert "beyond the airline's control" in result.summary
+
+
+@pytest.mark.parametrize("prompt_version", ["v1", "v2"])
+def test_run_agent_preserves_requested_prompt_version(prompt_version):
+    result, trace = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
+    assert result.prompt_version == f"research-v1+{prompt_version}"
+    intake = next(t for t in trace if t["step"] == "intake")
+    assert intake["prompt_version"] == prompt_version
+
+
+@pytest.mark.parametrize("scenario_id", [
+    "s05_cancel_late_notice_no_alternate", "s29_cancel_late_notice_mid_block_cap",
+])
+def test_cancellation_gold_amount_matches_calculator_trace(scenario_id):
+    scenario = json.loads((SCENARIO_DIR / f"{scenario_id}.json").read_text())
+    _, trace = graph.run_agent(scenario["claim"])
+    draft = next(t for t in trace if t["step"] == "draft")
+    assert draft["compensation"]["status"] == "computed"
+    assert draft["compensation"]["amount"] == scenario["expected"]["compensation_inr"]
+
+
+def test_run_agent_rejects_unknown_prompt_version():
+    with pytest.raises(ValueError, match="prompt_version"):
+        graph.run_agent(SCENARIO["claim"], prompt_version="v3")
 
 
 @pytest.mark.parametrize("budget", ["steps", "tools"])
@@ -210,8 +234,8 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     updates = _mock_worker_store(monkeypatch)
     original = graph.run_agent
 
-    def checked(claim, correlation_id, *, run_id):
-        result, trace = original(claim, correlation_id, run_id=run_id)
+    def checked(claim, correlation_id, *, run_id, prompt_version="v1"):
+        result, trace = original(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
         assert str(result.run_id) == run_id
         return result, trace
 
@@ -366,3 +390,20 @@ def test_relevant_citations_with_model_conflict_still_require_independent_review
     draft = next(t for t in trace if t["step"] == "draft")
     assert draft["checklist"]["airline_comparison"]["status"] == "missing"
     assert draft["route"] is Route.REQUEST_EVIDENCE
+
+
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_selected_prompt_content_reaches_provider(monkeypatch, version):
+    seen = []
+
+    def chat(messages, tools, **kwargs):
+        seen.append(messages[0]["content"])
+        raise httpx.ConnectError("stop after observing real provider input")
+
+    monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=chat))
+    _, trace = graph.run_agent(SCENARIO["claim"], prompt_version=version)
+    expected = (graph.PROMPT_PATH.parent / f"{version}.md").read_text(encoding="utf-8")
+    other = (graph.PROMPT_PATH.parent / f"{'v2' if version == 'v1' else 'v1'}.md").read_text(encoding="utf-8")
+    assert expected in seen[0] and other not in seen[0]
+    intake = next(s for s in trace if s["step"] == "intake")
+    assert intake["prompt_version"] == version

@@ -199,7 +199,7 @@ def test_quarantine_storage_limit_is_measured_in_utf8_bytes(monkeypatch):
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", FakeRedis())
     claim = demo_claim()
-    claim["statement"] = "✈" * 7_000
+    claim["statement"] = "\u2708" * 7_000
 
     response = client.post("/v1/claims", json=claim)
 
@@ -247,10 +247,20 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     response = client.post("/v1/claims", json=demo_claim(), headers={
         "traceparent": "00-12345678901234567890123456789012-1234567890123456-01",
         "x-correlation-id": "trace-test",
+        "x-prompt-version": "v2",
     })
     assert response.status_code == 202
     job = json.loads(fake_redis.lpush_calls[0][1])
     assert "traceparent" in job["trace_context"]
+    assert job["prompt_version"] == "v2"
+    seen_prompt_versions = []
+    original_run_agent = worker.run_agent
+
+    def capture_prompt_version(*args, **kwargs):
+        seen_prompt_versions.append(kwargs["prompt_version"])
+        return original_run_agent(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "run_agent", capture_prompt_version)
     worker.handle(job)
     spans = exporter.get_finished_spans()
     publish = next(span for span in spans if span.name == "queue.publish")
@@ -263,6 +273,7 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
                  "tool.search_corpus", "tool.get_references", "tool.compute_compensation"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
     assert updates[-1]["status"] == "escalated"
+    assert seen_prompt_versions == ["v2"]
     assert "pnr" not in str([dict(s.attributes) for s in spans])
 
     def fail(*args, **kwargs):
@@ -278,3 +289,8 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     assert updates[-1]["error"] == worker.PUBLIC_WORKER_ERROR
     assert "provider unavailable" in str(updates[-1]["trace"])
     assert updates[-1]["finished_at"] is not None
+
+
+def test_submit_rejects_unknown_prompt_version():
+    response = client.post("/v1/claims", json=demo_claim(), headers={"x-prompt-version": "v3"})
+    assert response.status_code == 400
