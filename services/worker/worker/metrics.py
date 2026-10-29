@@ -9,3 +9,8 @@ RUN_LATENCY = Histogram("agent_run_duration_seconds", "Worker execution time",
 STEPS = Histogram("agent_steps", "Work steps per run", buckets=(0, 1, 2, 3, 5, 8, 12, 20))
 TOOLS = Histogram("agent_tool_calls", "Tool reservations per run", buckets=(0, 1, 2, 5, 10, 15, 20))
 NODE_LATENCY = Histogram("agent_node_duration_seconds", "Graph node duration", ["node"])
+LLM_BREAKER_STATE = Gauge(
+    "llm_circuit_breaker_state",
+    "LLM provider breaker state: 0=closed, 1=open, 2=half-open",
+    ["provider"],
+)
