@@ -5,12 +5,14 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import redis
 from app import main as api
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from triage_common.cache import CORPUS_VERSION_KEY
 
 ROOT = Path(__file__).resolve().parents[1]
 client = TestClient(api.app)
@@ -67,12 +69,41 @@ def demo_claim():
     return scenario["claim"]
 
 
+def test_missing_corpus_version_skips_cache_and_enqueues_claim(monkeypatch):
+    stored = []
+    fake_redis = FakeRedis()
+    # A leftover entry under the old fallback must never be read.
+    claim = api.ClaimIn.model_validate(demo_claim())
+    stale_key = api.run_cache_key(claim.model_dump(mode="json"), "v1", "demo-fixture-v1", "127.0.0.1")
+    fake_redis.set(stale_key, '{"status":"escalated","result":{}}')
+    assert api.current_corpus_version(fake_redis) is None
+    monkeypatch.setattr(api.settings, "cache_enabled", True)
+    monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
+    monkeypatch.setattr(api, "r", fake_redis)
+    cache_read = Mock(side_effect=AssertionError("unknown corpus must skip cache"))
+    monkeypatch.setattr(api, "cache_get", cache_read)
+    key_builder = Mock(side_effect=AssertionError("unknown corpus must skip cache key"))
+    monkeypatch.setattr(api, "run_cache_key", key_builder)
+    request = Request({
+        "type": "http", "method": "POST", "path": "/v1/claims", "headers": [],
+        "client": ("127.0.0.1", 12345), "state": {"cid": "unknown-corpus"},
+    })
+
+    response = api.submit_claim(claim, request)
+
+    assert response.status is api.RunStatus.queued
+    assert len(stored) == len(fake_redis.lpush_calls) == 1
+    cache_read.assert_not_called()
+    key_builder.assert_not_called()
+
+
 def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
     stored = []
     fake_redis = FakeRedis()
     claim_data = demo_claim()
     client_id = "127.0.0.1"
     prompt_version = "v1"
+    fake_redis.set(CORPUS_VERSION_KEY, "corpus-a")
     cached_result = {
         "route": "escalate",
         "summary": "Cached safe result",
@@ -104,7 +135,7 @@ def test_repeated_claim_is_returned_from_client_scoped_run_cache(monkeypatch):
     assert fake_redis.lpush_calls == []
 
 
-def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
+def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch, research_env):
     from triage_common.contracts import EscalationReason, Route
     from worker import main as worker
 
@@ -114,6 +145,7 @@ def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
     monkeypatch.setattr(api, "SessionLocal", lambda: FakeSession(stored))
     monkeypatch.setattr(api, "r", fake_redis)
     monkeypatch.setattr(worker, "cache_redis", fake_redis)
+    fake_redis.set(CORPUS_VERSION_KEY, worker.get_corpus().version)
     monkeypatch.setattr(worker, "get_run", lambda _run_id: stored[0])
     monkeypatch.setattr(worker, "claim_run", lambda _run_id, **_kwargs: 1)
 
@@ -162,7 +194,7 @@ def test_worker_cache_write_is_reused_by_api_without_enqueue(monkeypatch):
     assert stored[1].trace[0]["hit"] is True
 
 
-def test_worker_does_not_cache_provider_failures(monkeypatch):
+def test_worker_does_not_cache_provider_failures(monkeypatch, research_env):
     from triage_common.contracts import EscalationReason, Route
     from worker import main as worker
 

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from triage_common.cache import DEMO_CORPUS_VERSION, run_cache_key
+from triage_common.cache import CORPUS_VERSION_KEY, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from worker import main as worker_main
 from worker.agent import graph
@@ -30,10 +30,13 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
         "verified": False,
         "requires_human_approval": True,
     }
-    key = run_cache_key(SCENARIO["claim"], "v1", DEMO_CORPUS_VERSION, "unknown")
+    key = run_cache_key(SCENARIO["claim"], "v1", corpus.get_corpus().version, "unknown")
 
     class FakeCache:
-        values = {key: json.dumps({"status": "escalated", "result": cached_result})}
+        values = {
+            key: json.dumps({"status": "escalated", "result": cached_result}),
+            CORPUS_VERSION_KEY: "stale-redis-version",
+        }
 
         def get(self, name):
             return self.values.get(name)
@@ -51,6 +54,7 @@ def test_worker_returns_completed_result_from_run_cache(monkeypatch):
     assert updates[-1]["status"] == "escalated"
     assert updates[-1]["result"] == cached_result
     assert updates[-1]["trace"][0]["hit"] is True
+    assert updates[-1]["trace"][0]["corpus_version"] == corpus.get_corpus().version
 
 
 def tool_call(name, **arguments):
@@ -106,8 +110,6 @@ def test_technical_fault_escalates_conflict_with_car_and_airline_citations():
 
 
 @pytest.mark.parametrize("prompt_version", ["v1", "v2"])
-
-
 def test_run_agent_preserves_requested_prompt_version(prompt_version):
     result, trace = graph.run_agent(SCENARIO["claim"], prompt_version=prompt_version)
     assert result.prompt_version == f"research-v1+{prompt_version}"
@@ -118,8 +120,6 @@ def test_run_agent_preserves_requested_prompt_version(prompt_version):
 @pytest.mark.parametrize("scenario_id", [
     "s05_cancel_late_notice_no_alternate", "s29_cancel_late_notice_mid_block_cap",
 ])
-
-
 def test_cancellation_gold_amount_matches_calculator_trace(scenario_id):
     scenario = json.loads((SCENARIO_DIR / f"{scenario_id}.json").read_text())
     _, trace = graph.run_agent(scenario["claim"])
@@ -134,8 +134,6 @@ def test_run_agent_rejects_unknown_prompt_version():
 
 
 @pytest.mark.parametrize("budget", ["steps", "tools"])
-
-
 def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
     calls = []
 
@@ -155,8 +153,6 @@ def test_looping_fake_node_finalizes_at_exact_budget(monkeypatch, budget):
 
 
 @pytest.mark.parametrize("budget", ["steps", "tools"])
-
-
 def test_real_tool_loop_exhausts_exact_budget(monkeypatch, budget):
     def looping_reply(messages, tools, **kwargs):
         calls = [tool_call("get_clause", clause_id="3.3.2")] * (1 if budget == "steps" else 20)
@@ -230,8 +226,6 @@ def test_unsupported_claim_escalates_instead_of_making_up_a_decision():
 
 
 @pytest.mark.parametrize("used,invoked,reserved", [(13, True, 14), (14, False, 15), (15, False, 15)])
-
-
 def test_research_reserves_before_each_tool(monkeypatch, used, invoked, reserved):
     provider = SimpleNamespace(chat=lambda *a, **kw: {
         "tool_calls": [tool_call("get_clause", clause_id="3.3.2")], "content": None,
@@ -274,17 +268,30 @@ def _mock_worker_store(monkeypatch):
     return updates
 
 
+@pytest.mark.parametrize("error", [OSError("missing corpus"), ValueError("invalid corpus")])
+def test_worker_skips_cache_when_local_corpus_version_is_unknown(monkeypatch, error):
+    updates = _mock_worker_store(monkeypatch)
+    monkeypatch.setattr(worker_main.settings, "cache_enabled", True)
+    monkeypatch.setattr(worker_main, "get_corpus", Mock(side_effect=error))
+    cache_read, cache_write = Mock(), Mock()
+    monkeypatch.setattr(worker_main, "cache_get", cache_read)
+    monkeypatch.setattr(worker_main, "cache_set", cache_write)
+
+    assert worker_main.handle({"run_id": str(uuid4())}) is True
+
+    assert updates[-1][1]["status"] == "escalated"
+    cache_read.assert_not_called()
+    cache_write.assert_not_called()
+
+
 @pytest.mark.parametrize("budget_exhausted", [False, True])
-
-
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
     updates = _mock_worker_store(monkeypatch)
     original = graph.run_agent
 
-    def checked(claim, correlation_id, *, run_id, prompt_version, corpus_version):
-        result, trace = original(claim, correlation_id, run_id=run_id, prompt_version=prompt_version,
-                                 corpus_version=corpus_version)
+    def checked(claim, correlation_id, *, run_id, prompt_version):
+        result, trace = original(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
         assert str(result.run_id) == run_id
         return result, trace
 
@@ -305,8 +312,6 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
 
 
 @pytest.mark.parametrize("route", [Route.DECLINE, Route.PAY, Route.REQUEST_EVIDENCE])
-
-
 def test_worker_never_publishes_unverified_consequential_draft(monkeypatch, route):
     original = graph.make_draft
 
@@ -382,8 +387,6 @@ def test_missing_facilities_chunk_cannot_support_a_meals_draft(monkeypatch):
 
 
 @pytest.mark.parametrize("reply", [None, {"tool_calls": [None]}, {"tool_calls": "invalid"}])
-
-
 def test_malformed_provider_envelope_escalates(monkeypatch, reply):
     monkeypatch.setattr(graph, "get_llm", lambda: SimpleNamespace(chat=lambda *a, **kw: reply))
     result, _ = graph.run_agent(SCENARIO["claim"])
@@ -401,8 +404,6 @@ def test_fabricated_comparison_citations_cannot_finish_research(monkeypatch):
 
 
 @pytest.mark.parametrize("status", ["compatible", "conflict"])
-
-
 def test_irrelevant_retrieved_citations_cannot_create_conflict_or_complete_research(monkeypatch, research_env, status):
     original_tool, original_chat = graph.execute_tool, research_env.chat
     car, airline = corpus.get_clause("3.3.2"), corpus.get_clause("10.2", "INDIGO-COC-DOM")
@@ -450,8 +451,6 @@ def test_relevant_citations_with_model_conflict_still_require_independent_review
 
 
 @pytest.mark.parametrize("version", ["v1", "v2"])
-
-
 def test_selected_prompt_content_reaches_provider(monkeypatch, version):
     seen = []
 

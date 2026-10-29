@@ -14,7 +14,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
-from triage_common.cache import cache_get, cache_set, cacheable_result, current_corpus_version, run_cache_key
+from triage_common.cache import cache_get, cache_set, cacheable_result, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
 from triage_common.settings import settings
 from triage_common.store import claim_run, finish_run, get_run, heartbeat_run, init_db, recover_stale_run
@@ -22,6 +22,7 @@ from triage_common.telemetry import configure_tracing
 
 from .agent.graph import run_agent
 from .metrics import ACTIVE, CACHE_HITS, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
+from .tools.corpus import get_corpus
 
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
 log = logging.getLogger("worker")
@@ -90,9 +91,13 @@ def _handle(job: dict) -> bool:
         legacy_version = claim.pop("prompt_version", settings.prompt_version)
         client_scope = job.get("client_id", "unknown")
         prompt_version = job.get("prompt_version", legacy_version)
-        corpus_version = current_corpus_version(cache_redis)
-        cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
-        if settings.cache_enabled:
+        try:
+            corpus_version = get_corpus().version
+        except (OSError, ValueError):
+            corpus_version = None
+        use_cache = settings.cache_enabled and corpus_version is not None
+        if use_cache:
+            cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
             cached = cache_get(cache_redis, cache_key)
             if cached is not None:
                 cached_result = cached["result"]
@@ -118,7 +123,6 @@ def _handle(job: dict) -> bool:
                 correlation_id=job.get("cid", ""),
                 run_id=str(run_id),
                 prompt_version=prompt_version,
-                corpus_version=corpus_version,
             )
             rec = Recommendation(
                 route=result.route,
@@ -174,7 +178,7 @@ def _handle(job: dict) -> bool:
         RUNS.labels(rec.route.value, reason).inc()
         cached_status = RunStatus.escalated.value if rec.route == Route.escalate else RunStatus.done.value
         cached_result = rec.model_dump(mode="json")
-        if settings.cache_enabled and cacheable_result(cached_result):
+        if use_cache and cacheable_result(cached_result):
             cache_set(
                 cache_redis,
                 cache_key,

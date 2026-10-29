@@ -258,13 +258,12 @@ def run_agent(
     *,
     run_id: str | None = None,
     prompt_version: str = "v1",
-    corpus_version: str = "unavailable",
 ) -> tuple[Result, list[dict]]:
     if prompt_version not in {"v1", "v2"}:
         raise ValueError("prompt_version must be 'v1' or 'v2'")
     out = GRAPH.invoke(
         {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
-         "corpus_version": corpus_version, "started_at": time.monotonic(),
+         "corpus_version": "unavailable", "started_at": time.monotonic(),
          "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
         # Allow finalization after the last permitted work step; LangGraph's
         # recursion guard remains a second safety net, not the budget mechanism.

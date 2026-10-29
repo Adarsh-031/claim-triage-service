@@ -7,16 +7,36 @@ import pytest
 import redis
 from pydantic import ValidationError
 from triage_common.cache import (
+    CORPUS_VERSION_KEY,
     RUN_CACHE_VERSION,
     allow_run,
     cache_get,
     cache_set,
     cacheable_result,
+    current_corpus_version,
     run_cache_key,
 )
 from triage_common.corpus_version import corpus_version_from_directory
 from triage_common.settings import Settings
 from worker.tools.corpus import Corpus
+
+
+@pytest.mark.parametrize("version", [None, "corpus-a"])
+def test_current_corpus_version_requires_published_version(version):
+    class Client:
+        def get(self, key):
+            assert key == CORPUS_VERSION_KEY
+            return version
+
+    assert current_corpus_version(Client()) == version
+
+
+def test_current_corpus_version_is_unknown_when_redis_is_unavailable():
+    class Client:
+        def get(self, key):
+            raise redis.RedisError("unavailable")
+
+    assert current_corpus_version(Client()) is None
 
 
 def test_run_cache_key_normalizes_statement_and_includes_versions():

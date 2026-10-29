@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from .contracts import Recommendation
 
-DEMO_CORPUS_VERSION = "demo-fixture-v1"
 CORPUS_VERSION_KEY = "triage:corpus:version"
 RUN_CACHE_VERSION = "graph-v1"
 
@@ -65,11 +64,11 @@ def run_cache_key(
     return "triage:cache:run:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def current_corpus_version(client) -> str:
+def current_corpus_version(client) -> str | None:
     try:
-        return client.get(CORPUS_VERSION_KEY) or DEMO_CORPUS_VERSION
+        return client.get(CORPUS_VERSION_KEY)
     except redis.RedisError:
-        return DEMO_CORPUS_VERSION
+        return None
 
 
 def cache_get(client, key: str) -> dict[str, Any] | None:

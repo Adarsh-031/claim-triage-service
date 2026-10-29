@@ -136,8 +136,8 @@ def submit_claim(claim: ClaimIn, request: Request):
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": str(retry_after)})
         claim_data = claim.model_dump(mode="json")
         client_id = _client_id(request)
-        if settings.cache_enabled:
-            corpus_version = current_corpus_version(r)
+        corpus_version = current_corpus_version(r) if settings.cache_enabled else None
+        if corpus_version:
             key = run_cache_key(claim_data, prompt_version, corpus_version, client_id)
             cached = cache_get(r, key)
             if cached:
