@@ -14,13 +14,15 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
+from triage_common.cache import cache_get, cache_set, cacheable_result, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
 from triage_common.settings import settings
 from triage_common.store import claim_run, finish_run, get_run, heartbeat_run, init_db, recover_stale_run
 from triage_common.telemetry import configure_tracing
 
 from .agent.graph import run_agent
-from .metrics import ACTIVE, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
+from .metrics import ACTIVE, CACHE_HITS, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
+from .tools.corpus import get_corpus
 
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
 log = logging.getLogger("worker")
@@ -35,6 +37,7 @@ MAX_REQUEUES = 2
 REAPER_LOCK_TTL_S = 30
 REDIS_RETRY_DELAY_S = 1
 PUBLIC_WORKER_ERROR = "Automated processing failed. Please retry or route this claim to a human officer."
+cache_redis = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 def handle(job: dict) -> bool:
@@ -84,11 +87,43 @@ def _handle(job: dict) -> bool:
     )
     heartbeat_thread.start()
     try:
+        claim = dict(run.claim)
+        legacy_version = claim.pop("prompt_version", settings.prompt_version)
+        client_scope = job.get("client_id", "unknown")
+        prompt_version = job.get("prompt_version", legacy_version)
         try:
-            claim = dict(run.claim)
-            legacy_version = claim.pop("prompt_version", "v1")
-            result, trace = run_agent(claim, correlation_id=job.get("cid", ""), run_id=str(run_id),
-                                      prompt_version=job.get("prompt_version", legacy_version))
+            corpus_version = get_corpus().version
+        except (OSError, ValueError):
+            corpus_version = None
+        use_cache = settings.cache_enabled and corpus_version is not None
+        if use_cache:
+            cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
+            cached = cache_get(cache_redis, cache_key)
+            if cached is not None:
+                cached_result = cached["result"]
+                persisted = finish_run(
+                    run_id,
+                    attempt,
+                    status=cached["status"],
+                    result=cached_result,
+                    trace=[{"step": "cache", "hit": True, "corpus_version": corpus_version}],
+                    finished_at=datetime.now(UTC),
+                    error=None,
+                )
+                if persisted:
+                    CACHE_HITS.labels("run").inc()
+                    reason = cached_result.get("escalation_reason") or "none"
+                    RUNS.labels(cached_result["route"], reason).inc()
+                    return True
+                log.warning("run %s attempt %s lost ownership before cache finalization", run_id, attempt)
+                return False
+        try:
+            result, trace = run_agent(
+                claim,
+                correlation_id=job.get("cid", ""),
+                run_id=str(run_id),
+                prompt_version=prompt_version,
+            )
             rec = Recommendation(
                 route=result.route,
                 summary=result.summary,
@@ -141,6 +176,15 @@ def _handle(job: dict) -> bool:
 
         reason = rec.escalation_reason.value if rec.escalation_reason else "none"
         RUNS.labels(rec.route.value, reason).inc()
+        cached_status = RunStatus.escalated.value if rec.route == Route.escalate else RunStatus.done.value
+        cached_result = rec.model_dump(mode="json")
+        if use_cache and cacheable_result(cached_result):
+            cache_set(
+                cache_redis,
+                cache_key,
+                {"status": cached_status, "result": cached_result},
+                settings.cache_ttl_s,
+            )
         final = next((step for step in reversed(trace) if step.get("step") == "finalize"), {})
         STEPS.observe(final.get("step_count", 0))
         TOOLS.observe(final.get("tool_calls", 0))

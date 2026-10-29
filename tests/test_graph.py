@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from triage_common.cache import CORPUS_VERSION_KEY, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from worker import main as worker_main
 from worker.agent import graph
@@ -15,6 +16,45 @@ SCENARIO_DIR = Path(__file__).parents[1] / "eval/scenarios"
 SCENARIO = json.loads((SCENARIO_DIR / "s01_demo_cancellation_alternate_taken.json").read_text())
 
 pytestmark = pytest.mark.usefixtures("research_env")
+
+
+def test_worker_returns_completed_result_from_run_cache(monkeypatch):
+    run_id = uuid4()
+    cached_result = {
+        "route": "escalate",
+        "summary": "cached",
+        "entitlements": [],
+        "compensation_inr": None,
+        "citations": [],
+        "escalation_reason": "VERIFICATION_FAILED",
+        "verified": False,
+        "requires_human_approval": True,
+    }
+    key = run_cache_key(SCENARIO["claim"], "v1", corpus.get_corpus().version, "unknown")
+
+    class FakeCache:
+        values = {
+            key: json.dumps({"status": "escalated", "result": cached_result}),
+            CORPUS_VERSION_KEY: "stale-redis-version",
+        }
+
+        def get(self, name):
+            return self.values.get(name)
+
+    updates = []
+    monkeypatch.setattr(worker_main, "cache_redis", FakeCache())
+    monkeypatch.setattr(worker_main, "get_run", lambda _: SimpleNamespace(claim=SCENARIO["claim"]))
+    monkeypatch.setattr(worker_main, "claim_run", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(worker_main, "heartbeat_run", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(worker_main, "finish_run", lambda _rid, _attempt, **fields: (updates.append(fields) or True))
+    monkeypatch.setattr(worker_main, "run_agent", lambda *_args, **_kwargs: pytest.fail("cache hit must skip graph"))
+
+    assert worker_main.handle({"run_id": str(run_id), "client_id": "unknown", "prompt_version": "v1"}) is True
+
+    assert updates[-1]["status"] == "escalated"
+    assert updates[-1]["result"] == cached_result
+    assert updates[-1]["trace"][0]["hit"] is True
+    assert updates[-1]["trace"][0]["corpus_version"] == corpus.get_corpus().version
 
 
 def tool_call(name, **arguments):
@@ -228,13 +268,29 @@ def _mock_worker_store(monkeypatch):
     return updates
 
 
+@pytest.mark.parametrize("error", [OSError("missing corpus"), ValueError("invalid corpus")])
+def test_worker_skips_cache_when_local_corpus_version_is_unknown(monkeypatch, error):
+    updates = _mock_worker_store(monkeypatch)
+    monkeypatch.setattr(worker_main.settings, "cache_enabled", True)
+    monkeypatch.setattr(worker_main, "get_corpus", Mock(side_effect=error))
+    cache_read, cache_write = Mock(), Mock()
+    monkeypatch.setattr(worker_main, "cache_get", cache_read)
+    monkeypatch.setattr(worker_main, "cache_set", cache_write)
+
+    assert worker_main.handle({"run_id": str(uuid4())}) is True
+
+    assert updates[-1][1]["status"] == "escalated"
+    cache_read.assert_not_called()
+    cache_write.assert_not_called()
+
+
 @pytest.mark.parametrize("budget_exhausted", [False, True])
 def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exhausted):
     run_id = uuid4()
     updates = _mock_worker_store(monkeypatch)
     original = graph.run_agent
 
-    def checked(claim, correlation_id, *, run_id, prompt_version="v1"):
+    def checked(claim, correlation_id, *, run_id, prompt_version):
         result, trace = original(claim, correlation_id, run_id=run_id, prompt_version=prompt_version)
         assert str(result.run_id) == run_id
         return result, trace
@@ -242,7 +298,9 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     monkeypatch.setattr(worker_main, "run_agent", checked)
     if budget_exhausted:
         monkeypatch.setattr(graph.settings, "agent_max_tool_calls", 1)
-    assert worker_main.handle({"run_id": str(run_id), "cid": "worker-test"}) is True
+    monkeypatch.setattr(worker_main.settings, "cache_enabled", False)
+    assert worker_main.handle({"run_id": str(run_id), "cid": "worker-test",
+                               "prompt_version": "v1"}) is True
     assert updates[0] == (run_id, {"status": RunStatus.running.value})
     assert updates[-1][0] == run_id
     final = updates[-1][1]

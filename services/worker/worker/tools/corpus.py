@@ -8,11 +8,12 @@ from hashlib import sha256
 from pathlib import Path
 
 from triage_common.contracts import Chunk
+from triage_common.corpus_version import CORPUS_ARTIFACTS, corpus_version_from_contents
 from triage_common.settings import settings
 
 CAR_DOC = "CAR-S3-M-IV-R4"
 DEFAULT_CORPUS_DIR = Path(__file__).resolve().parents[4] / "corpus" / "processed"
-ARTIFACTS = ("chunks.jsonl", "refs.json", "definitions.json")
+ARTIFACTS = CORPUS_ARTIFACTS
 
 
 def qualified(clause_id: str, doc_id: str = CAR_DOC) -> str:
@@ -31,7 +32,7 @@ class Corpus:
         self.clauses = {qualified(c.clause_id, c.doc_id): self.chunks[c.chunk_id] for c in chunks}
         self.graph = json.loads(contents["refs.json"])
         self.definitions = json.loads(contents["definitions.json"])
-        self.version = "processed-" + sha256(b"".join(contents.values())).hexdigest()[:16]
+        self.version = corpus_version_from_contents(contents)
 
     def clause(self, clause_id: str, doc_id: str = CAR_DOC) -> dict | None:
         return self.clauses.get(qualified(clause_id, doc_id))

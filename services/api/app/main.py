@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-import time
 import uuid
 
 import redis
@@ -17,6 +17,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import text
+from triage_common.cache import allow_run, cache_get, current_corpus_version, run_cache_key
 from triage_common.contracts import (
     TERMINAL_STATUSES,
     ClaimIn,
@@ -45,8 +46,13 @@ r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 CLAIMS = Counter("claims_submitted_total", "Claims accepted for processing")
 QUARANTINED = Counter("claims_quarantined_total", "Claims rejected at the boundary")
+CACHE_HITS = Counter("api_cache_hits_total", "API cache hits by component", ["component"])
 RAW_BODY_LIMIT = 16 * 1024
 SUBMIT_LATENCY = Histogram("submit_latency_seconds", "Latency of POST /v1/claims")
+RATE_LIMIT_REDIS_ERRORS = Counter(
+    "rate_limit_redis_errors_total", "Rate limit checks unavailable because Redis failed"
+)
+log = logging.getLogger("triage-api")
 
 
 @app.on_event("startup")
@@ -71,17 +77,18 @@ async def correlation_id(request: Request, call_next):
 
 
 def _client_id(request: Request) -> str:
-    candidate = request.headers.get("x-client-id")
-    if not candidate:
-        candidate = request.client.host if request.client else "unknown"
-    return candidate[:255]
+    # Client-supplied IDs are unauthenticated and cannot safely define quotas
+    # or cache namespaces. Honor only the source address seen by this service.
+    return (request.client.host if request.client else "unknown")[:255]
 
 
-def _rate_limited(client: str) -> bool:
-    key = f"rl:{client}:{int(time.time() // 60)}"
-    n = r.incr(key)
-    r.expire(key, 61)
-    return n > settings.rate_limit_per_min
+def _rate_limit(client: str) -> tuple[bool, int] | None:
+    try:
+        return allow_run(r, client, settings.rate_limit_per_min)
+    except redis.RedisError:
+        RATE_LIMIT_REDIS_ERRORS.inc()
+        log.warning("Redis unavailable during rate-limit check; rejecting request with 503", exc_info=True)
+        return None
 
 
 @app.exception_handler(RequestValidationError)
@@ -99,9 +106,13 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
     ]
     qid = None
     if request.url.path == "/v1/claims":
-        client = request.client.host if request.client else "unknown"
-        if _rate_limited(client):
-            return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
+        rate_limit = _rate_limit(_client_id(request))
+        if rate_limit is None:
+            return JSONResponse(status_code=503, content={"detail": "rate limiter unavailable"})
+        allowed, retry_after = rate_limit
+        if not allowed:
+            return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"},
+                                headers={"Retry-After": str(retry_after)})
         with SessionLocal() as s, s.begin():
             q = Quarantine(raw_body=body, errors=errors, client_id=_client_id(request))
             s.add(q)
@@ -113,17 +124,38 @@ async def quarantine_invalid(request: Request, exc: RequestValidationError):
 
 @app.post("/v1/claims", response_model=SubmitOut, status_code=202)
 def submit_claim(claim: ClaimIn, request: Request):
-    prompt_version = request.headers.get("x-prompt-version", "v1")
+    prompt_version = request.headers.get("x-prompt-version", settings.prompt_version)
     if not re.fullmatch(r"v[12]", prompt_version):
         raise HTTPException(400, "x-prompt-version must be 'v1' or 'v2'")
     with SUBMIT_LATENCY.time():
-        client = request.client.host if request.client else "unknown"
-        if _rate_limited(client):
-            raise HTTPException(429, "rate limit exceeded")
+        rate_limit = _rate_limit(_client_id(request))
+        if rate_limit is None:
+            raise HTTPException(503, "rate limiter unavailable")
+        allowed, retry_after = rate_limit
+        if not allowed:
+            raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": str(retry_after)})
+        claim_data = claim.model_dump(mode="json")
+        client_id = _client_id(request)
+        corpus_version = current_corpus_version(r) if settings.cache_enabled else None
+        if corpus_version:
+            key = run_cache_key(claim_data, prompt_version, corpus_version, client_id)
+            cached = cache_get(r, key)
+            if cached:
+                with SessionLocal() as s, s.begin():
+                    run = Run(
+                        claim=claim_data,
+                        status=cached["status"],
+                        result=cached["result"],
+                        trace=[{"step": "cache", "hit": True, "corpus_version": corpus_version}],
+                    )
+                    s.add(run)
+                    s.flush()
+                    run_id = run.id
+                CACHE_HITS.labels("run").inc()
+                CLAIMS.inc()
+                return SubmitOut(run_id=run_id, status=RunStatus(cached["status"]), poll_url=f"/v1/runs/{run_id}")
         with SessionLocal() as s, s.begin():
-            run_claim = claim.model_dump(mode="json")
-            run_claim["prompt_version"] = prompt_version
-            run = Run(claim=run_claim, status=RunStatus.queued.value)
+            run = Run(claim=claim_data, status=RunStatus.queued.value)
             s.add(run)
             s.flush()
             run_id = run.id
@@ -134,6 +166,7 @@ def submit_claim(claim: ClaimIn, request: Request):
             inject(carrier)
             r.lpush(settings.queue_name, json.dumps({"run_id": str(run_id), "cid": request.state.cid,
                                                      "prompt_version": prompt_version,
+                                                     "client_id": client_id,
                                                      "trace_context": carrier}))
         CLAIMS.inc()
         return SubmitOut(run_id=run_id, status=RunStatus.queued, poll_url=f"/v1/runs/{run_id}")

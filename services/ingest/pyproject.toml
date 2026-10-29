@@ -2,7 +2,7 @@
 name = "triage-ingest"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["triage-common", "pyyaml>=6.0.3", "chromadb==1.5.3"]
+dependencies = ["triage-common", "pyyaml>=6.0.3", "chromadb==1.5.3", "redis>=5.0"]
 
 [tool.uv.sources]
 triage-common = { workspace = true }

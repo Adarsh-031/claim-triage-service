@@ -4885,6 +4885,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "redis" },
     { name = "sqlalchemy" },
 ]
 
@@ -4895,6 +4896,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
 
@@ -4905,6 +4907,7 @@ source = { virtual = "services/ingest" }
 dependencies = [
     { name = "chromadb" },
     { name = "pyyaml" },
+    { name = "redis" },
     { name = "triage-common" },
 ]
 
@@ -4912,6 +4915,7 @@ dependencies = [
 requires-dist = [
     { name = "chromadb", specifier = "==1.5.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "triage-common", editable = "libs/common" },
 ]
 
