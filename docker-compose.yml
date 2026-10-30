@@ -44,7 +44,7 @@ services:
 
   web:
     build: { context: ., dockerfile: services/web/Dockerfile }
-    ports: ["3000:80"]
+    ports: ["${WEB_PORT:-3002}:80"]
     depends_on:
       api: { condition: service_healthy }
     healthcheck:
