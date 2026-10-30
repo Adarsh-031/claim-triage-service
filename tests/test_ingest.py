@@ -128,9 +128,11 @@ def manifest(tmp_path, monkeypatch):
         dest = tmp_path / doc["file"]
         if doc["format"] == "pdf":
             dest.write_bytes(b"PDF stand-in: text extraction is replaced with the layout fixture")
-            doc["sha256"] = hashlib.sha256(dest.read_bytes()).hexdigest()
         else:
             shutil.copyfile(ROOT / "corpus" / doc["file"], dest)
+        # The fixture copies the current snapshots into a temporary corpus.
+        # Keep each copied source's integrity metadata in sync with its bytes.
+        doc["sha256"] = hashlib.sha256(dest.read_bytes()).hexdigest()
     path = tmp_path / "manifest.yaml"
     path.write_text(yaml.safe_dump({"documents": documents}))
 
