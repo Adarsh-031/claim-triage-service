@@ -148,7 +148,7 @@ def submit_claim(claim: ClaimIn, request: Request):
             rec = Recommendation(route=Route.ESCALATE, escalation_reason=EscalationReason.GUARDRAIL_BLOCKED,
                                  summary=guardrails.block_summary(hits))
             step = {"step": "guardrail", "stage": "input", "service": "api", "blocked": True,
-                    "hits": [h.as_dict() for h in hits]}
+                    "prompt_version": prompt_version, "hits": [h.as_dict() for h in hits]}
             with SessionLocal() as s, s.begin():
                 now = datetime.now(UTC)
                 run = Run(claim=claim_data, status=RunStatus.escalated.value, result=rec.model_dump(mode="json"),

@@ -210,3 +210,22 @@ def test_installed_trulens_provider_contract():
                                ("relevance_with_cot_reasons", {"prompt", "response"})]:
         assert parameters <= set(inspect.signature(getattr(provider, method)).parameters)
 
+
+
+def test_api_guardrail_block_is_scored_without_an_intake_step():
+    run_id = "00000000-0000-0000-0000-000000000030"
+    result_body = {"route": "escalate", "escalation_reason": "GUARDRAIL_BLOCKED", "summary": "blocked",
+                   "citations": []}
+
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(202, json={"run_id": run_id, "status": "escalated"})
+        if request.url.path.endswith("/trace"):
+            return httpx.Response(200, json={"steps": [{"step": "guardrail", "service": "api",
+                                                         "prompt_version": "v1", "blocked": True}]})
+        return httpx.Response(200, json={"status": "escalated", "result": result_body})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        scenario = Path(__file__).parents[1] / "eval/scenarios/s30_stated_cause_prompt_injection.json"
+        result = run_scenario(client, "http://api", scenario, "v1", 0, corpus_version="any")
+    assert result["status"] != "error" and result["route_correct"] is True
