@@ -175,6 +175,8 @@ class Result(BaseModel):
     summary: str
     citations: list[Citation] = Field(default_factory=list)
     amount: float | None = Field(default=None, ge=0)
+    # Non-monetary entitlements owed regardless of compensation (e.g. meals under CAR 3.8.1(a)).
+    entitlements: list[str] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
     prompt_version: str
     corpus_version: str

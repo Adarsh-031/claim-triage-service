@@ -196,3 +196,16 @@ def test_token_bucket_refills_and_expires(live_redis):
     assert allowed is True
     assert retry_after == 0
     assert 0 < live_redis.ttl(key) <= 120
+
+
+def test_run_cache_key_changes_with_llm_provider_and_model(monkeypatch):
+    from triage_common.settings import settings
+
+    claim = {"pnr": "ABC123"}
+    monkeypatch.setattr(settings, "llm_provider", "stub")
+    stub = run_cache_key(claim, "v1", "corpus-a")
+    monkeypatch.setattr(settings, "llm_provider", "openrouter")
+    monkeypatch.setattr(settings, "llm_model_primary", "model-a:free")
+    model_a = run_cache_key(claim, "v1", "corpus-a")
+    monkeypatch.setattr(settings, "llm_model_primary", "model-b:free")
+    assert len({stub, model_a, run_cache_key(claim, "v1", "corpus-a")}) == 3

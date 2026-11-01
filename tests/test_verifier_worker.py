@@ -218,3 +218,10 @@ def test_agent_worker_reaper_recovers_a_draft_when_no_verifier_survives(db, queu
     time.sleep(0.01)
     worker_main.reap_once(queues)  # nobody verified it in time
     assert run_row(db, run_id).status == "escalated"
+
+
+def test_accepted_alternate_decline_lists_meals_and_does_not_ask_for_the_cause():
+    result, _ = graph.run_agent(S01["claim"])
+    assert result.route is Route.DECLINE
+    assert result.entitlements == ["Meals and refreshments in relation to waiting time (CAR 3.8.1(a))"]
+    assert "stated_cause" not in result.summary

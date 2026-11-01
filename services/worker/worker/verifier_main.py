@@ -134,6 +134,7 @@ def _publish(job: dict, run_id: uuid.UUID, run_attempt: int, claim: int, state: 
     trace = state.get("trace", [])
     final = next((t for t in reversed(trace) if t.get("step") == "finalize"), {})
     rec = Recommendation(route=result.route, summary=result.summary, compensation_inr=result.amount,
+                         entitlements=getattr(result, "entitlements", []),
                          citations=result.citations, escalation_reason=result.escalation_reason,
                          verified=final.get("verified") is True)
     status = RunStatus.escalated if rec.route == Route.escalate else RunStatus.done

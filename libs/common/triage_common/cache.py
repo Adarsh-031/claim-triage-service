@@ -53,12 +53,22 @@ def _normalize(value: Any, key: str | None = None) -> Any:
     return value
 
 
+def _llm_identity() -> str:
+    from .settings import settings
+
+    if settings.llm_provider == "stub":
+        return "stub"
+    return f"{settings.llm_provider}:{settings.llm_model_primary}:{settings.llm_model_fallback}"
+
+
 def run_cache_key(
     claim: dict[str, Any], prompt_version: str, corpus_version: str, client_scope: str = "shared"
 ) -> str:
     payload = json.dumps({"claim": _normalize(claim), "prompt_version": prompt_version,
                           "corpus_version": corpus_version,
                           "graph_version": RUN_CACHE_VERSION,
+                          # A stub answer must never be served after switching to a real model.
+                          "llm": _llm_identity(),
                           "client_scope": hashlib.sha256(client_scope.encode("utf-8")).hexdigest()},
                          sort_keys=True, separators=(",", ":"))
     return "triage:cache:run:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
