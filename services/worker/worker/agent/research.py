@@ -8,6 +8,7 @@ from triage_common.contracts import Citation, EscalationReason, Route
 
 from ..tools import corpus
 from ..tools.compensation import compute_compensation
+from ..tools.retrieval import LANGCHAIN_TOOLS, ClauseArgs, SearchArgs
 
 # Provider-visible eligibility facts only. New contract fields are private by default;
 # fare inputs stay in the server-side calculator, and booking identifiers stay local.
@@ -68,17 +69,6 @@ class Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class SearchArgs(Args):
-    query: str = Field(min_length=1, max_length=500)
-    k: int = Field(default=5, ge=1, le=10)
-    doc_id: str | None = None
-
-
-class ClauseArgs(Args):
-    clause_id: str = Field(min_length=1, max_length=150)
-    doc_id: str = corpus.CAR_DOC
-
-
 class DefinitionArgs(Args):
     term: str = Field(min_length=1, max_length=150)
     doc_id: str | None = None
@@ -123,9 +113,14 @@ def validate_report(report: dict, state: dict) -> dict:
     return {"comparison": comparison.model_dump()}
 
 
+def _langchain(name: str):
+    lc_tool = LANGCHAIN_TOOLS[name]
+    return lambda **args: lc_tool.invoke(args)
+
+
 REGISTRY = {
-    "search_corpus": (SearchArgs, corpus.search_corpus, "Search source chunks; follow references after retrieval."),
-    "get_clause": (ClauseArgs, corpus.get_clause, "Exact source lookup; qualified clause IDs are supported."),
+    "search_corpus": (SearchArgs, _langchain("search_corpus"), LANGCHAIN_TOOLS["search_corpus"].description),
+    "get_clause": (ClauseArgs, _langchain("get_clause"), LANGCHAIN_TOOLS["get_clause"].description),
     "get_references": (ClauseArgs, corpus.get_references, "Outgoing qualified edges from refs.json."),
     "get_referrers": (ClauseArgs, corpus.get_referrers, "Incoming qualified edges; discover modifying clauses."),
     "get_definition": (DefinitionArgs, corpus.get_definition, "Citable definitions from definitions.json."),

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://triage:triage@postgres:5432/triage"
     chroma_url: str = "http://chroma:8000"
     chroma_collection: str = "triage-clauses-v1"
+    # Empty CHROMA_URL disables vector search (offline tests/CI); retrieval then uses BM25 only.
+    retrieval_timeout_s: float = Field(default=5.0, gt=0)
+    retrieval_cooldown_s: float = Field(default=30.0, ge=0)
     worker_metrics_port: int = 8002
     otel_exporter_otlp_endpoint: str = "http://jaeger:4317"
     rate_limit_per_min: int = Field(default=10, ge=1)

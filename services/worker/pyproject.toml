@@ -10,6 +10,9 @@ dependencies = [
   "prometheus-client>=0.20",
   "opentelemetry-sdk>=1.25",
   "opentelemetry-exporter-otlp>=1.25",
+  "chromadb==1.5.3",
+  "rank-bm25>=0.2.2",
+  "langchain-core>=1.0",
 ]
 
 [tool.uv.sources]

@@ -1,0 +1,16 @@
+# Retrieval gold set: a query passes when any listed clause is in the top 3.
+# Run: uv run python -m scripts.eval_retrieval  (needs the compose Chroma for vector/hybrid)
+- {query: "cancellation compensation", clauses: ["3.3.2"]}
+- {query: "flight cancelled what compensation do I get", clauses: ["3.3.2"]}
+- {query: "compensation amount for cancelled flight", clauses: ["3.3.2"]}
+- {query: "alternate flight accepted", clauses: ["3.3.2"]}
+- {query: "contact information not provided", clauses: ["3.3.3"]}
+- {query: "extraordinary circumstances beyond control", clauses: ["1.4", "3.3.4"]}
+- {query: "force majeure technical fault", clauses: ["1.4"]}
+- {query: "meals refreshments waiting time", clauses: ["3.8.1(a)", "3.8.1"]}
+- {query: "3.8.1(a)", clauses: ["3.8.1(a)"]}
+- {query: "hotel accommodation for long delay", clauses: ["3.8.1(b)", "3.4.3"]}
+- {query: "flight delayed by 3 hours", clauses: ["3.4.1"]}
+- {query: "denied boarding compensation", clauses: ["3.2.2"]}
+- {query: "downgraded to economy refund", clauses: ["3.5.1"]}
+- {query: "refund timeline", clauses: ["3.3.5", "3.7.1"]}

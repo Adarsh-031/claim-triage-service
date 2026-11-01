@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from triage_common.settings import settings
 from worker.agent import graph
 from worker.agent.llm import OpenAICompatibleLLM
+from worker.tools import corpus as corpus_tools
 
 from cli.ingest import definition_table, parse_car, parse_markdown, reference_graph
 
@@ -31,6 +32,9 @@ def processed_corpus(tmp_path_factory):
 @pytest.fixture
 def research_env(monkeypatch, processed_corpus):
     monkeypatch.setattr(settings, "corpus_dir", str(processed_corpus))
+    # No live Chroma in tests: hybrid search degrades to BM25 deterministically.
+    monkeypatch.setattr(settings, "chroma_url", "")
+    corpus_tools.VECTOR.reset()
     spec = importlib.util.spec_from_file_location("research_http_stub", ROOT / "services/llm-stub/app.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

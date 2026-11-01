@@ -23,6 +23,8 @@ services:
     <<: *app-env
     volumes:
       - ./corpus:/src/corpus:ro
+      # Same MiniLM ONNX model ingest downloaded, so query embeddings match the index offline.
+      - embedding_cache:/root/.cache/chroma
     environment:
       CORPUS_DIR: ${CORPUS_DIR:-/src/corpus/processed}
     depends_on:
