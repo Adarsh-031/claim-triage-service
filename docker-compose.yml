@@ -165,6 +165,20 @@ services:
     ports: ["8088:8080"]
     restart: unless-stopped
 
+  # Load generator (#34); only with `--profile loadtest`, so a normal `up` never starts it.
+  locust:
+    image: locustio/locust:2.32.4
+    profiles: ["loadtest"]
+    user: root  # writes CSVs into the bind-mounted perf/results
+    command: ["-f", "/mnt/locust/locustfile.py", "--host", "http://api:8000"]
+    volumes:
+      - ./deploy/locust:/mnt/locust:ro
+      - ./eval/scenarios:/mnt/scenarios:ro
+      - ./perf/results:/mnt/results
+    ports: ["8089:8089"]
+    depends_on:
+      api: { condition: service_healthy }
+
   prometheus:
     image: prom/prometheus:v2.54.0
     volumes: ["./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]

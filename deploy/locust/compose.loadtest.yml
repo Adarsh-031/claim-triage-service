@@ -1,0 +1,16 @@
+# Load-test overrides (#34). Use with the main file:
+#   docker compose -f docker-compose.yml -f deploy/locust/compose.loadtest.yml --profile loadtest up -d --build --wait
+# Forces the stub provider (never spends OpenRouter quota), disables the result cache so
+# every claim runs, and lifts the per-client rate limit (all Locust users share one IP).
+x-loadtest-env: &loadtest-env
+  LLM_PROVIDER: stub
+  CACHE_ENABLED: "false"
+  RATE_LIMIT_PER_MIN: "100000"
+
+services:
+  api:
+    environment: *loadtest-env
+  worker:
+    environment: *loadtest-env
+  verifier-worker:
+    environment: *loadtest-env

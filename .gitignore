@@ -13,3 +13,8 @@ data/
 *.log
 build/
 *.egg-info/
+
+# Load-test output (#34); keep only the summary
+perf/results/*
+!perf/results/.gitkeep
+!perf/results/summary.md
