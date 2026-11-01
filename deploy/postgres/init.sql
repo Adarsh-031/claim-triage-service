@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS runs (
     trace json,
     error text,
     requeue_count integer NOT NULL DEFAULT 0,
+    resume_count integer NOT NULL DEFAULT 0,
     started_at timestamptz,
     heartbeat_at timestamptz,
     finished_at timestamptz,
@@ -43,3 +44,19 @@ CREATE TABLE IF NOT EXISTS verifier_outcomes (
     created_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_verifier_outcomes_run_id ON verifier_outcomes (run_id);
+
+CREATE TABLE IF NOT EXISTS drafts (
+    run_id uuid NOT NULL,
+    run_attempt integer NOT NULL,
+    verify_attempt integer NOT NULL DEFAULT 0,
+    state json NOT NULL,
+    status varchar(20) NOT NULL DEFAULT 'pending',
+    claim_count integer NOT NULL DEFAULT 0,
+    agent_host varchar(255),
+    verifier_host varchar(255),
+    heartbeat_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (run_id, run_attempt)
+);
+CREATE INDEX IF NOT EXISTS ix_drafts_status_updated ON drafts (status, updated_at);

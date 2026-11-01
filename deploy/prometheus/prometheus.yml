@@ -9,5 +9,11 @@ scrape_configs:
         type: A
         port: 8002
         refresh_interval: 10s
+  - job_name: verifier-worker
+    dns_sd_configs:
+      - names: ["verifier-worker"]
+        type: A
+        port: 8003
+        refresh_interval: 10s
   - job_name: prometheus
     static_configs: [{ targets: ["localhost:9090"] }]

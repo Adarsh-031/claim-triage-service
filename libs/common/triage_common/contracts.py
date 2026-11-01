@@ -213,6 +213,7 @@ class RunState(TypedDict, total=False):
     verified_draft: dict[str, object] | None
     verifier_outcomes: list[dict]
     attempts: int  # grounding-verifier retries used (max 2)
+    awaiting_verification: bool  # split mode: draft stored, verifier-worker continues
     step_count: int
     started_at: float  # monotonic clock, local to the worker process
     budget_exceeded: bool
@@ -241,6 +242,7 @@ class Recommendation(BaseModel):
 class RunStatus(StrEnum):
     queued = "queued"
     running = "running"
+    verifying = "verifying"  # draft handed to verifier-worker (#28); not terminal
     done = "done"
     completed = "completed"  # Legacy status value accepted during rollout.
     escalated = "escalated"

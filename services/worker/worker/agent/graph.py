@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -352,29 +353,59 @@ def traced_finalize(state: RunState) -> RunState:
         return finalize(state)
 
 
-def build_graph():
+def handoff(state: RunState) -> RunState:
+    """Split mode: stop after drafting; the verifier-worker continues from the stored draft."""
+    state["awaiting_verification"] = True
+    _log(state, "handoff", host=socket.gethostname(), service="agent-worker", attempt=state.get("attempts", 0))
+    return state
+
+
+def _after_draft(split: bool):
+    def route(state: RunState) -> str:
+        if state.get("budget_exceeded") or (state.get("draft") or {}).get("route") == Route.ESCALATE:
+            return "finalize"
+        return "handoff" if split else "verify"
+    return route
+
+
+def build_graph(*, split: bool = False, entry: str = "intake"):
+    """inline: the whole pipeline in one process (tests, CLI eval, VERIFIER_MODE=inline).
+    split: stop at handoff after draft; entry='retry' resumes a run the verifier sent back."""
     g = StateGraph(RunState)
     for name, fn in [("intake", intake), ("research", research)]:
         g.add_node(name, _bounded(fn))
     for name, fn in [("draft", draft), ("verify", verify), ("retry", retry)]:
         g.add_node(name, _timed(fn))
+    g.add_node("handoff", handoff)
     g.add_node("finalize", traced_finalize)
-    g.set_entry_point("intake")
+    g.set_entry_point(entry)
     g.add_conditional_edges("intake",
                             lambda s: "finalize" if s.get("budget_exceeded") or s.get("draft") else "research",
                             {"finalize": "finalize", "research": "research"})
     g.add_conditional_edges("research", route_fn,
                             {"finalize": "finalize", "research": "research", "draft": "draft"})
-    g.add_conditional_edges("draft", lambda s: "finalize" if s.get("budget_exceeded")
-                            or s.get("draft", {}).get("route") == Route.ESCALATE else "verify",
-                            {"finalize": "finalize", "verify": "verify"})
+    g.add_conditional_edges("draft", _after_draft(split),
+                            {"finalize": "finalize", "verify": "verify", "handoff": "handoff"})
     g.add_conditional_edges("verify", verify_route, {"finalize": "finalize", "retry": "retry"})
     g.add_edge("retry", "draft")
+    g.add_edge("handoff", END)
     g.add_edge("finalize", END)
     return g.compile()
 
 
 GRAPH = build_graph()
+AGENT_GRAPH = build_graph(split=True)
+RESUME_GRAPH = build_graph(split=True, entry="retry")
+RECURSION_LIMIT = settings.agent_max_steps + 4 + 3 * verifier.MAX_RETRIES
+
+
+def _initial_state(claim: dict, correlation_id: str, run_id: str | None, prompt_version: str) -> RunState:
+    if prompt_version not in {"v1", "v2"}:
+        raise ValueError("prompt_version must be 'v1' or 'v2'")
+    return {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
+            "corpus_version": "unavailable", "started_at": time.monotonic(),
+            "step_count": 0, "tool_calls": 0, "attempts": 0,
+            "trace": [{"step": "start", "cid": correlation_id}]}
 
 
 def run_agent(
@@ -385,19 +416,71 @@ def run_agent(
     prompt_version: str = "v1",
     llm=None,
 ) -> tuple[Result, list[dict]]:
-    if prompt_version not in {"v1", "v2"}:
-        raise ValueError("prompt_version must be 'v1' or 'v2'")
+    state = _initial_state(claim, correlation_id, run_id, prompt_version)
     # Provider objects stay outside serializable graph state and are reset after each run.
     token = _INTAKE_LLM.set(llm)
     try:
-        out = GRAPH.invoke(
-            {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
-             "corpus_version": "unavailable", "started_at": time.monotonic(),
-             "step_count": 0, "tool_calls": 0, "attempts": 0,
-             "trace": [{"step": "start", "cid": correlation_id}]},
-            # Room for finalization after the last work step plus draft/verify/retry rounds.
-            {"recursion_limit": settings.agent_max_steps + 4 + 3 * verifier.MAX_RETRIES},
-        )
+        # Room for finalization after the last work step plus draft/verify/retry rounds.
+        out = GRAPH.invoke(state, {"recursion_limit": RECURSION_LIMIT})
     finally:
         _INTAKE_LLM.reset(token)
     return Result.model_validate(out["result"]), out.get("trace", [])
+
+
+# --- Split mode (#28): agent-worker -> drafts row + q:verify -> verifier-worker ------------
+
+# Research conversation stays in the agent process; the verifier needs evidence, not chat.
+_NOT_HANDED_OFF = frozenset({"messages", "started_at", "awaiting_verification"})
+
+
+def dump_state(state: RunState) -> dict:
+    """JSON-safe state for the drafts row. Monotonic time becomes a wall-clock deadline."""
+    elapsed = time.monotonic() - state["started_at"]
+    out = {k: v for k, v in state.items() if k not in _NOT_HANDED_OFF}
+    out["deadline_epoch"] = time.time() + settings.agent_run_timeout_s - elapsed
+    return json.loads(json.dumps(out, default=str))
+
+
+def load_state(data: dict) -> RunState:
+    """Rebuild graph state in another process; the remaining wall-clock budget carries over."""
+    state = {k: v for k, v in data.items() if k != "deadline_epoch"}
+    remaining = float(data.get("deadline_epoch", time.time())) - time.time()
+    state["started_at"] = time.monotonic() - (settings.agent_run_timeout_s - remaining)
+    for key in ("draft", "verified_draft"):
+        if isinstance(state.get(key), dict) and state[key].get("route"):
+            state[key] = {**state[key], "route": Route(state[key]["route"])}
+            if state[key].get("escalation_reason"):
+                state[key]["escalation_reason"] = EscalationReason(state[key]["escalation_reason"])
+    return state
+
+
+def run_until_handoff(claim: dict, correlation_id: str = "", *, run_id: str | None = None,
+                      prompt_version: str = "v1", llm=None) -> RunState:
+    """Agent-worker half: returns a finalized state (early escalation) or one awaiting verification."""
+    token = _INTAKE_LLM.set(llm)
+    try:
+        return AGENT_GRAPH.invoke(_initial_state(claim, correlation_id, run_id, prompt_version),
+                                  {"recursion_limit": RECURSION_LIMIT})
+    finally:
+        _INTAKE_LLM.reset(token)
+
+
+def resume_until_handoff(state: RunState) -> RunState:
+    """Agent-worker half of a verifier retry: expand retrieval, re-draft, hand off again."""
+    return RESUME_GRAPH.invoke(state, {"recursion_limit": RECURSION_LIMIT})
+
+
+def verify_once(state: RunState) -> tuple[RunState, str]:
+    """Verifier-worker half: one verification attempt. Returns (state, 'finalize' | 'retry').
+
+    On 'finalize' the state carries `result`; on 'retry' the agent-worker resumes it.
+    """
+    state = dict(state)
+    state.pop("awaiting_verification", None)
+    state = _timed(verify)(state)
+    if state["trace"][-1].get("step") == "verify":
+        state["trace"][-1].update(host=socket.gethostname(), service="verifier-worker")
+    decision = verify_route(state)
+    if decision == "finalize":
+        state = traced_finalize(state)
+    return state, decision

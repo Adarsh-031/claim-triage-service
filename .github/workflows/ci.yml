@@ -35,7 +35,7 @@ jobs:
       - run: uv sync --frozen --group evaluation
       - run: uv run ruff check .
       - run: uv run pytest -q
-      - name: Prepare corpus and start the actual API, provider stub, and worker
+      - name: Prepare corpus and start the actual API, provider stub, agent worker and verifier worker
         env:
           DATABASE_URL: postgresql+psycopg://triage@localhost:5432/triage
           REDIS_URL: redis://localhost:6379/0
@@ -57,7 +57,10 @@ jobs:
           echo $! >> "$RUNNER_TEMP/bg.pids"
           .venv/bin/python -m uvicorn app.main:app --port 8000 > api.log 2>&1 &
           echo $! >> "$RUNNER_TEMP/bg.pids"
-          .venv/bin/python -m worker.main > worker.log 2>&1 &
+          # Split mode, as in Compose: the eval exercises the real agent -> verifier hand-off.
+          VERIFIER_MODE=split .venv/bin/python -m worker.main > worker.log 2>&1 &
+          echo $! >> "$RUNNER_TEMP/bg.pids"
+          VERIFIER_MODE=split .venv/bin/python -m worker.verifier_main > verifier.log 2>&1 &
           echo $! >> "$RUNNER_TEMP/bg.pids"
           for i in $(seq 1 30); do
             if curl --fail --silent http://localhost:8000/readyz; then exit 0; fi
@@ -91,4 +94,5 @@ jobs:
             eval/results/
             api.log
             worker.log
+            verifier.log
             stub.log
