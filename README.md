@@ -53,7 +53,7 @@ and `ingest` should show `Exited (0)`. The readiness request should return HTTP 
 
 | Service | Host port → container port | Access |
 |---|---:|---|
-| Web client (nginx) | 3000 → 80 | http://localhost:3000 |
+| Web client (nginx) | `WEB_PORT` (default 3002) → 80 | http://localhost:3002 |
 | API | 8000 → 8000 | http://localhost:8000/docs |
 | LLM stub | 8001 → 8001 | http://localhost:8001 (health: `/healthz`) |
 | Jaeger UI | 16686 → 16686 | http://localhost:16686; OTLP 4317 is internal |

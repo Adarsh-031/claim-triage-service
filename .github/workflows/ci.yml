@@ -7,27 +7,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7.4.2-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      TRIAGE_TEST_REDIS_URL: redis://localhost:6379/15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with: { enable-cache: true }
-      - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run pytest -q
-  evaluation-integration:
-    runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
       postgres:
@@ -48,18 +27,23 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval 5s
           --health-timeout 3s --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://triage@localhost:5432/triage
-      REDIS_URL: redis://localhost:6379/0
-      LLM_PROVIDER: stub
-      LLM_BASE_URL: http://localhost:8001/v1
-      STUB_DELAY: '0'
-      RATE_LIMIT_PER_MIN: '1000'
-      OTEL_SDK_DISABLED: 'true'
+      TRIAGE_TEST_REDIS_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with: { enable-cache: true }
       - run: uv sync --frozen --group evaluation
+      - run: uv run ruff check .
+      - run: uv run pytest -q
       - name: Prepare corpus and start the actual API, provider stub, and worker
+        env:
+          DATABASE_URL: postgresql+psycopg://triage@localhost:5432/triage
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: stub
+          LLM_BASE_URL: http://localhost:8001/v1
+          STUB_DELAY: '0'
+          RATE_LIMIT_PER_MIN: '1000'
+          OTEL_SDK_DISABLED: 'true'
         run: |
           export CORPUS_DIR="$RUNNER_TEMP/eval-corpus"
           echo "CORPUS_DIR=$CORPUS_DIR" >> "$GITHUB_ENV"
@@ -74,6 +58,14 @@ jobs:
           done
           exit 1
       - name: Evaluate all scenarios through HTTP and the real queue
+        env:
+          DATABASE_URL: postgresql+psycopg://triage@localhost:5432/triage
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: stub
+          LLM_BASE_URL: http://localhost:8001/v1
+          STUB_DELAY: '0'
+          RATE_LIMIT_PER_MIN: '1000'
+          OTEL_SDK_DISABLED: 'true'
         run: >-
           uv run python -m cli.evaluate --semantic off --corpus-dir "$CORPUS_DIR"
           --report eval/results/eval-report.md --timeout 90 --poll-interval 0.1
@@ -86,4 +78,3 @@ jobs:
             api.log
             worker.log
             stub.log
-
