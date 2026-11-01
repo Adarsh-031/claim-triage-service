@@ -50,9 +50,15 @@ jobs:
           echo "CORPUS_DIR=$CORPUS_DIR" >> "$GITHUB_ENV"
           uv run python -m scripts.build_eval_fixture --output "$CORPUS_DIR"
           uv run python -c "from triage_common.store import init_db; init_db()"
-          uv run uvicorn app:app --app-dir services/llm-stub --port 8001 > stub.log 2>&1 &
-          uv run uvicorn app.main:app --port 8000 > api.log 2>&1 &
-          uv run python -m worker.main > worker.log 2>&1 &
+          # Start long-lived services from the venv directly, not via `uv run`:
+          # a background `uv run` holds the uv cache lock, so setup-uv's
+          # post-job `uv cache prune` waits 300 s and fails the job.
+          .venv/bin/python -m uvicorn app:app --app-dir services/llm-stub --port 8001 > stub.log 2>&1 &
+          echo $! >> "$RUNNER_TEMP/bg.pids"
+          .venv/bin/python -m uvicorn app.main:app --port 8000 > api.log 2>&1 &
+          echo $! >> "$RUNNER_TEMP/bg.pids"
+          .venv/bin/python -m worker.main > worker.log 2>&1 &
+          echo $! >> "$RUNNER_TEMP/bg.pids"
           for i in $(seq 1 30); do
             if curl --fail --silent http://localhost:8000/readyz; then exit 0; fi
             sleep 1
@@ -71,6 +77,12 @@ jobs:
         run: >-
           uv run python -m cli.evaluate --semantic off --corpus-dir "$CORPUS_DIR"
           --report eval/results/eval-report.md --timeout 90 --poll-interval 0.1
+      - name: Stop background services
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/bg.pids" ]; then
+            xargs -r kill < "$RUNNER_TEMP/bg.pids" || true
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
