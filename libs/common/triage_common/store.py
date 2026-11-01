@@ -55,6 +55,20 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class VerifierOutcome(Base):
+    """One grounding-verifier attempt for a run (#27); the full detail also stays in runs.trace."""
+    __tablename__ = "verifier_outcomes"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    run_attempt: Mapped[int] = mapped_column(Integer)
+    verifier_attempt: Mapped[int] = mapped_column(Integer)
+    verified: Mapped[bool] = mapped_column(Boolean)
+    failed_checks: Mapped[list] = mapped_column(JSON)
+    passed_checks: Mapped[list] = mapped_column(JSON)
+    detail: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
@@ -186,3 +200,19 @@ def recover_stale_run(
     with SessionLocal() as session, session.begin():
         run = session.scalar(select(Run).where(Run.id == run_id).with_for_update())
         return recover_stale_run_state(run, now=now, stale_after_s=stale_after_s, max_requeues=max_requeues)
+
+
+def record_verifier_outcomes(run_id: uuid.UUID, run_attempt: int, outcomes: list[dict]) -> None:
+    """Store each verify step from the agent trace; one row per verifier attempt."""
+    if not outcomes:
+        return
+    with SessionLocal() as session, session.begin():
+        session.add_all([
+            VerifierOutcome(
+                run_id=run_id, run_attempt=run_attempt, verifier_attempt=int(o.get("attempt", 0)),
+                verified=bool(o.get("verified")), failed_checks=list(o.get("failed", [])),
+                passed_checks=list(o.get("passed", [])),
+                detail={k: o.get(k) for k in ("prompt_version", "llm_called", "lower_protection", "error")},
+            )
+            for o in outcomes
+        ])

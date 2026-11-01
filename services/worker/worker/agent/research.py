@@ -193,14 +193,19 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
             "missing_chunks": missing_chunks, "missing_fields": missing_fields,
         }
         if item == "airline_comparison" and complete:
-            results[item]["status"] = "missing"
-            results[item]["reason"] = "Source relationship is unverified. Human review required."
+            # Coverage is not a finding. The verifier compares CAR and CoC wording.
+            results[item]["status"] = "missing" if missing else "needs_verification"
+            results[item]["reason"] = ("Comparison sources missing. Human review required." if missing else
+                                       "CAR/CoC relationship is checked by the grounding verifier.")
     return results
 
 
 def citations(state: dict) -> list[dict]:
+    """Cite the chunks the checklist relies on; other retrieved context is not a citation."""
+    relied = {key for entry in (state.get("checklist") or {}).values() for key in entry.get("chunk_ids", [])}
     return [Citation(chunk_id=c["chunk_id"], doc_id=c["doc_id"], clause_id=c["clause_id"],
-                     quote=c["text"]).model_dump(mode="json") for c in state.get("retrieved", [])]
+                     quote=c["text"]).model_dump(mode="json") for c in state.get("retrieved", [])
+            if not relied or c["chunk_id"] in relied]
 
 
 def provision_conflict(state: dict) -> list[str]:
@@ -244,9 +249,15 @@ def make_draft(state: dict) -> dict:
     computation = state.get("compensation") or {}
     # Missing legal sources can never support a substantive draft.
     missing_sources = any(item["missing_chunks"] for item in state["checklist"].values())
-    if "airline_comparison" in state["checklist"]:
-        missing_sources |= state["checklist"]["airline_comparison"]["status"] != "cited"
     accepted = field_value(state["claim"], "alternate.accepted") is True
+    if (state["claim"].get("disruption_type") == "cancellation" and not accepted and not missing_sources
+            and computation.get("status") == "computed" and (computation.get("amount") or 0) > 0
+            and state["claim"].get("contact_info_provided") is True and not state["claim"].get("stated_cause")):
+        # No alternate taken, contact details given, no extraordinary cause claimed.
+        return {"route": Route.PAY, "citations": cited, "amount": computation["amount"],
+                "summary": (f"Cancellation compensation of INR {computation['amount']} is due for late notice "
+                            "with no alternate taken (CAR 3.3.1, 3.3.2). "
+                            "A claims officer must approve any payment.")}
     accepted_alternate_decline = (state["claim"].get("disruption_type") == "cancellation" and accepted
                      and computation.get("status") == "computed" and computation.get("amount") == 0
                      and not missing_sources)

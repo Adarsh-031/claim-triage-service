@@ -61,21 +61,20 @@ def tool_call(name, **arguments):
     return {"id": "test-tool", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-def test_s01_research_preserves_real_citations_and_requires_comparison_review():
+def test_s01_research_preserves_real_citations_and_is_verified():
     run_id = str(uuid4())
     result, trace = graph.run_agent(SCENARIO["claim"], "test-cid", run_id=run_id)
     assert Result.model_validate_json(result.model_dump_json()) == result
     assert str(result.run_id) == run_id
-    # Research is complete; the separate grounding verifier remains a required gate.
-    assert result.route is Route.ESCALATE
-    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
+    # Research is complete and the separate grounding verifier passed the draft.
+    assert result.route is Route.DECLINE and result.escalation_reason is None
     draft = next(t for t in trace if t["step"] == "draft")
-    assert draft["route"] == Route.REQUEST_EVIDENCE
-    assert draft["amount"] is None and draft["compensation"]["amount"] == 0
-    assert draft["checklist"]["airline_comparison"]["status"] == "missing"
-    assert "unverified" in draft["checklist"]["airline_comparison"]["reason"]
-    assert "compensation declined" not in draft["summary"]
-    assert "Meals and refreshments are owed" not in draft["summary"]
+    assert draft["route"] == Route.DECLINE
+    assert draft["amount"] == 0 and draft["compensation"]["amount"] == 0
+    assert draft["checklist"]["airline_comparison"]["status"] == "needs_verification"
+    assert "verifier" in draft["checklist"]["airline_comparison"]["reason"]
+    assert "compensation declined" in draft["summary"]
+    assert "Meals and refreshments are owed" in draft["summary"]
     assert set(SCENARIO["expected"]["must_cite"]) <= {c.clause_id for c in result.citations}
     chunks = corpus.get_corpus().chunks
     for citation in result.citations:
@@ -86,14 +85,16 @@ def test_s01_research_preserves_real_citations_and_requires_comparison_review():
     assert result.prompt_version == "intake-v1+research-v1+v1"
     assert result.corpus_version == corpus.get_corpus().version
     assert trace[0]["cid"] == "test-cid"
-    assert trace[-1]["step_count"] == 8
+    # Only intake and research consume the model step budget; draft/verify are deterministic gates.
+    assert trace[-1]["step_count"] == 6
     assert trace[-1]["tool_calls"] == 14
-    assert trace[-2]["verified"] is False
+    assert trace[-2]["step"] == "verify" and trace[-2]["verified"] is True
+    assert trace[-1]["verified"] is True
     assert {t["name"] for t in trace if t["step"] == "tool"} == {
         "search_corpus", "get_clause", "get_references", "get_referrers", "get_definition",
         "get_claim_field", "compute_compensation",
     }
-    assert all(item["status"] in {"cited", "missing"} for item in draft["checklist"].values())
+    assert all(item["status"] in {"cited", "missing", "needs_verification"} for item in draft["checklist"].values())
     assert draft["checklist"]["extraordinary_circumstances"]["missing_fields"] == ["stated_cause"]
 
 
@@ -279,7 +280,7 @@ def test_worker_skips_cache_when_local_corpus_version_is_unknown(monkeypatch, er
 
     assert worker_main.handle({"run_id": str(uuid4())}) is True
 
-    assert updates[-1][1]["status"] == "escalated"
+    assert updates[-1][1]["status"] == "done"
     cache_read.assert_not_called()
     cache_write.assert_not_called()
 
@@ -305,10 +306,14 @@ def test_worker_preserves_run_id_and_legacy_api_payload(monkeypatch, budget_exha
     assert updates[-1][0] == run_id
     final = updates[-1][1]
     rec = Recommendation.model_validate(final["result"])
-    assert final["status"] == "escalated"
-    assert rec.requires_human_approval is True and rec.verified is False
-    assert rec.escalation_reason is (EscalationReason.BUDGET_EXCEEDED if budget_exhausted
-                                     else EscalationReason.VERIFICATION_FAILED)
+    assert rec.requires_human_approval is True
+    if budget_exhausted:
+        assert final["status"] == "escalated" and rec.verified is False
+        assert rec.escalation_reason is EscalationReason.BUDGET_EXCEEDED
+    else:
+        # The demo claim passes grounding verification and publishes its decline.
+        assert final["status"] == "done" and rec.verified is True
+        assert rec.route is Route.DECLINE and rec.escalation_reason is None
 
 
 @pytest.mark.parametrize("route", [Route.DECLINE, Route.PAY, Route.REQUEST_EVIDENCE])
@@ -433,9 +438,9 @@ def test_irrelevant_retrieved_citations_cannot_create_conflict_or_complete_resea
 def test_relevant_citations_with_model_conflict_still_require_independent_review(monkeypatch, research_env):
     original = research_env.chat
 
-    def report(messages, *args, **kwargs):
-        reply = original(messages, *args, **kwargs)
-        if not reply.get("tool_calls"):
+    def report(messages, tools=None, **kwargs):
+        reply = original(messages, tools, **kwargs)
+        if tools and not reply.get("tool_calls"):  # the research report, not the verifier's verdict
             content = json.loads(reply["content"])
             content["comparison"]["status"] = "conflict"
             reply["content"] = json.dumps(content)
@@ -443,11 +448,12 @@ def test_relevant_citations_with_model_conflict_still_require_independent_review
 
     monkeypatch.setattr(research_env, "chat", report)
     result, trace = graph.run_agent({**SCENARIO["claim"], "stated_cause": "weather"})
-    assert result.escalation_reason is EscalationReason.VERIFICATION_FAILED
-    assert result.amount is None
+    # The research model's "conflict" is discarded; the verifier judges the comparison itself.
     draft = next(t for t in trace if t["step"] == "draft")
-    assert draft["checklist"]["airline_comparison"]["status"] == "missing"
-    assert draft["route"] is Route.REQUEST_EVIDENCE
+    assert draft["checklist"]["airline_comparison"]["status"] == "needs_verification"
+    verify = next(t for t in trace if t["step"] == "verify")
+    assert verify["llm_called"] is True and verify["lower_protection"] is False
+    assert result.route is Route.DECLINE and result.amount == 0
 
 
 @pytest.mark.parametrize("version", ["v1", "v2"])
@@ -480,8 +486,9 @@ def test_prompt_injection_cannot_change_route_or_create_amount():
             })}
 
     result, trace = graph.run_agent(claim, llm=HostileLLM())
-    assert result.route is Route.ESCALATE
-    assert result.amount is None
+    # Structured facts win: the injected statement neither changes the route nor creates money.
+    assert result.route is Route.DECLINE
+    assert result.amount == 0
     intake_trace = next(item for item in trace if item["step"] == "intake")
     assert intake_trace["facts"]["disruption_type"] == "cancellation"
     assert "400%" not in str(intake_trace["facts"])
@@ -519,7 +526,8 @@ def test_narrative_facts_reach_research_tools_checklist_and_calculator():
     assert draft["checklist"]["notice_period"]["missing_fields"] == []
     assert draft["checklist"]["alternate_offered_accepted"]["missing_fields"] == []
     assert draft["checklist"]["contact_details"]["missing_fields"] == []
-    assert result.route is Route.ESCALATE and result.amount is None
+    # The amount comes from the calculator on reconciled facts and passes verification.
+    assert result.route is Route.PAY and result.amount == 7500
     assert claim["disruption_type"] == "unknown" and claim["alternate"] is None
     assert graph._INTAKE_LLM.get() is None
     json.dumps(trace)

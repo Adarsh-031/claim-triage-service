@@ -483,7 +483,9 @@ def test_queue_propagates_trace_to_worker_and_graph(monkeypatch, research_env):
     for name in ["agent.intake", "agent.research", "agent.draft", "agent.verify", "agent.finalize",
                  "tool.search_corpus", "tool.get_references", "tool.compute_compensation"]:
         assert any(s.name == name and s.context.trace_id == consume.context.trace_id for s in spans)
-    assert updates[-1]["status"] == "escalated"
+    # The demo case is verified, so it publishes the decline rather than escalating.
+    assert updates[-1]["status"] == "done"
+    assert updates[-1]["result"]["route"] == "decline" and updates[-1]["result"]["verified"] is True
     assert seen_prompt_versions == ["v2"]
     assert "pnr" not in str([dict(s.attributes) for s in spans])
 
