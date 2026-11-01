@@ -119,6 +119,17 @@ def test_definitions_keep_provenance_and_aliases(car):
             assert entry["text"] in by_id[entry["chunk_id"]].text
 
 
+def test_committed_snapshots_match_manifest_hashes():
+    """The real manifest must verify against committed (LF-normalised) snapshots."""
+    documents = yaml.safe_load((ROOT / "corpus/manifest.yaml").read_text())["documents"]
+    snapshots = [doc for doc in documents if doc["format"] != "pdf"]
+    assert snapshots
+    for doc in snapshots:
+        data = (ROOT / "corpus" / doc["file"]).read_bytes()
+        assert b"\r\n" not in data, f"{doc['file']} has CRLF line endings"
+        assert hashlib.sha256(data).hexdigest() == doc["sha256"], doc["file"]
+
+
 @pytest.fixture
 def manifest(tmp_path, monkeypatch):
     """Run the complete pipeline offline using the real PDF's extracted text."""
@@ -128,11 +139,10 @@ def manifest(tmp_path, monkeypatch):
         dest = tmp_path / doc["file"]
         if doc["format"] == "pdf":
             dest.write_bytes(b"PDF stand-in: text extraction is replaced with the layout fixture")
+            # Only the stand-in changes bytes; snapshots keep the real manifest hash.
+            doc["sha256"] = hashlib.sha256(dest.read_bytes()).hexdigest()
         else:
             shutil.copyfile(ROOT / "corpus" / doc["file"], dest)
-        # The fixture copies the current snapshots into a temporary corpus.
-        # Keep each copied source's integrity metadata in sync with its bytes.
-        doc["sha256"] = hashlib.sha256(dest.read_bytes()).hexdigest()
     path = tmp_path / "manifest.yaml"
     path.write_text(yaml.safe_dump({"documents": documents}))
 

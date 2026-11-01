@@ -25,7 +25,7 @@ documents:
     format: markdown
     fetch: snapshot          # site blocks scripted downloads (Akamai); committed snapshot, hash-checked only
     retrieved_at: "2026-10-24"
-    sha256: 006d92ead46fe86d61a8a8ce0201c8e6b282cea67e8a4928a5b838f53ddb543c
+    sha256: cc45f61584b9a7a58b9d431e0330a0271cbb029dba0ad8a681071f5d8b7cc2ea
     precedence: may_add_not_reduce
 
   - doc_id: INDIGO-COC-INTL
@@ -38,6 +38,6 @@ documents:
     format: markdown
     fetch: snapshot
     retrieved_at: "2026-10-24"
-    sha256: 788e3d10385e7eb1f0db02481efe68eb74ae440af5677b83119def153b4086d0
+    sha256: 95d29742007160f5671c57c564e069f46e13be8f66b288c041d3bafba36f3b89
     precedence: may_add_not_reduce
     note: "For out-of-jurisdiction tests only; CAR covers flights to/from India."
