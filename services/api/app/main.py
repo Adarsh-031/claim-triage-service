@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 
 import redis
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -17,12 +18,15 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from sqlalchemy import text
+from triage_common import guardrails
 from triage_common.cache import allow_run, cache_get, current_corpus_version, run_cache_key
 from triage_common.contracts import (
     TERMINAL_STATUSES,
     ClaimIn,
+    EscalationReason,
     FeedbackIn,
     Recommendation,
+    Route,
     RunOut,
     RunStatus,
     SubmitOut,
@@ -46,6 +50,8 @@ r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 CLAIMS = Counter("claims_submitted_total", "Claims accepted for processing")
 QUARANTINED = Counter("claims_quarantined_total", "Claims rejected at the boundary")
+GUARDRAIL_BLOCKS = Counter("guardrail_blocks_total", "Guardrail hits that blocked a claim",
+                           ["stage", "kind", "rule"])
 CACHE_HITS = Counter("api_cache_hits_total", "API cache hits by component", ["component"])
 RAW_BODY_LIMIT = 16 * 1024
 SUBMIT_LATENCY = Histogram("submit_latency_seconds", "Latency of POST /v1/claims")
@@ -136,6 +142,25 @@ def submit_claim(claim: ClaimIn, request: Request):
             raise HTTPException(429, "rate limit exceeded", headers={"Retry-After": str(retry_after)})
         claim_data = claim.model_dump(mode="json")
         client_id = _client_id(request)
+        hits = guardrails.screen_input(claim_data)
+        if guardrails.blocked(hits):
+            # Blocked input never reaches the queue or a model; the run is escalated at once.
+            rec = Recommendation(route=Route.ESCALATE, escalation_reason=EscalationReason.GUARDRAIL_BLOCKED,
+                                 summary=guardrails.block_summary(hits))
+            step = {"step": "guardrail", "stage": "input", "service": "api", "blocked": True,
+                    "hits": [h.as_dict() for h in hits]}
+            with SessionLocal() as s, s.begin():
+                now = datetime.now(UTC)
+                run = Run(claim=claim_data, status=RunStatus.escalated.value, result=rec.model_dump(mode="json"),
+                          trace=[step], started_at=now, finished_at=now)
+                s.add(run)
+                s.flush()
+                run_id = run.id
+            for h in hits:
+                GUARDRAIL_BLOCKS.labels(h.stage, h.kind, h.rule).inc()
+            log.info("guardrail blocked claim run_id=%s rules=%s", run_id, [h.rule for h in hits])
+            CLAIMS.inc()
+            return SubmitOut(run_id=run_id, status=RunStatus.escalated, poll_url=f"/v1/runs/{run_id}")
         corpus_version = current_corpus_version(r) if settings.cache_enabled else None
         if corpus_version:
             key = run_cache_key(claim_data, prompt_version, corpus_version, client_id)
