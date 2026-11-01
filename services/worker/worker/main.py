@@ -20,7 +20,6 @@ from triage_common.contracts import EscalationReason, Recommendation, Result, Ro
 from triage_common.settings import settings
 from triage_common.store import (
     claim_run,
-    expire_waiting_drafts,
     finish_run,
     get_run,
     handoff_draft,
@@ -245,6 +244,21 @@ def _handoff(job: dict, run_id: uuid.UUID, attempt: int, state: dict) -> bool:
 
 
 def reap_once(r: redis.Redis) -> dict[str, int]:
+    """Reap the run queue and, in split mode, the verify queue too.
+
+    Covering the verify queue here means a verifier-worker that dies and never comes back
+    still has its claimed draft reclaimed and, after VERIFY_WAIT_S, escalated.
+    """
+    outcome = _reap_runs(r)
+    if settings.verifier_mode == "split":
+        from . import verifier_main
+
+        verify = verifier_main.reap_once(r)
+        outcome = {k: outcome[k] + verify[k] for k in outcome}
+    return outcome
+
+
+def _reap_runs(r: redis.Redis) -> dict[str, int]:
     """Reap entries older than the wall-clock budget, guarded by a Redis lease."""
     lock_key = f"{settings.queue_name}:reaper-lock"
     processing_key = f"{settings.queue_name}{PROCESSING_SUFFIX}"
@@ -281,8 +295,6 @@ def reap_once(r: redis.Redis) -> dict[str, int]:
                 r.lrem(processing_key, 1, raw)
                 requeued += 1
             # not_stale stays in the processing list for its current worker or a later pass.
-        if settings.verifier_mode == "split":
-            failed += len(expire_waiting_drafts(wait_s=settings.verify_wait_s))
         return {"requeued": requeued, "failed": failed}
     finally:
         # Atomic compare-and-delete avoids releasing a lease acquired by another worker.

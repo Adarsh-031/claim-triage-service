@@ -5,6 +5,7 @@ schema and a fake Redis, so the whole hand-off is exercised without containers.
 """
 import json
 import socket
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -203,3 +204,17 @@ def test_state_round_trip_keeps_the_remaining_wall_clock_budget():
     assert abs(loaded["started_at"] - state["started_at"]) < 1
     verified, decision = graph.verify_once(loaded)
     assert decision == "finalize" and verified["result"]["route"] == "decline"
+
+
+def test_agent_worker_reaper_recovers_a_draft_when_no_verifier_survives(db, queues, monkeypatch):
+    run_id = new_run(db)
+    agent(monkeypatch, queues, {"run_id": str(run_id)})
+    queues.blmove(verifier_main.settings.verify_queue_name, verifier_main._processing_key(), 5)
+    db.claim_draft(run_id, 1, host="verifier-dead")
+    monkeypatch.setattr(verifier_main, "HEARTBEAT_STALE_AFTER_S", -1)
+    worker_main.reap_once(queues)  # reclaims the draft back to pending
+    assert db.get_draft(run_id, 1).status == "pending"
+    monkeypatch.setattr(worker_main.settings, "verify_wait_s", 0.001)
+    time.sleep(0.01)
+    worker_main.reap_once(queues)  # nobody verified it in time
+    assert run_row(db, run_id).status == "escalated"

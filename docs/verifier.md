@@ -76,6 +76,8 @@ Never lost:
   back to `pending` and the message back on `triage:verify`. After 3 claims the run escalates.
 - verifier down / message lost: a draft still `pending` after `VERIFY_WAIT_S` (120 s) escalates
   (both workers run this sweep).
+- verifier never comes back: the agent-worker's reaper also covers the verify queue, so the claimed
+  draft is reclaimed and then escalates after `VERIFY_WAIT_S`.
 - stale verifier: every write is compare-and-set on `claim_count`, so a reclaimed verifier cannot publish.
 - verifier resumes are counted in `resume_count`, not against the crash-recovery limit.
 
