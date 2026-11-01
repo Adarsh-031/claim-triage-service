@@ -15,5 +15,8 @@ scrape_configs:
         type: A
         port: 8003
         refresh_interval: 10s
+  # Container CPU/memory per Compose service (#33).
+  - job_name: cadvisor
+    static_configs: [{ targets: ["cadvisor:8080"] }]
   - job_name: prometheus
     static_configs: [{ targets: ["localhost:9090"] }]

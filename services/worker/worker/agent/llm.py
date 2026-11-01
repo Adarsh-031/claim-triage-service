@@ -10,9 +10,12 @@ from uuid import uuid4
 
 import httpx
 import redis
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from triage_common.settings import settings
 
-from ..metrics import LLM_BREAKER_STATE
+from .. import usage
+from ..metrics import LLM_BREAKER_STATE, LLM_FALLBACKS, LLM_RETRIES
 
 log = logging.getLogger(__name__)
 
@@ -149,8 +152,9 @@ class CircuitBreaker:
 class OpenAICompatibleLLM:
     """HTTP client for an OpenAI-compatible chat-completions endpoint."""
 
-    def __init__(self, base_url: str, model: str, api_key: str = ""):
+    def __init__(self, base_url: str, model: str, api_key: str = "", *, report_cost: bool = False):
         self.model = model
+        self.report_cost = report_cost
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.client = httpx.Client(
             base_url=base_url,
@@ -162,16 +166,32 @@ class OpenAICompatibleLLM:
         body = {"model": self.model, "messages": messages}
         if tools:
             body["tools"] = tools
-        resp = self.client.post("/chat/completions", json=body,
-                                timeout=min(settings.llm_timeout_s, timeout_s)
-                                if timeout_s is not None else settings.llm_timeout_s)
-        resp.raise_for_status()
-        data = resp.json()
-        # Preserve the same message shape regardless of whether the endpoint is
-        # the local stub or OpenRouter.
-        msg = data["choices"][0]["message"]
-        msg["usage"] = data.get("usage", {})
-        return msg
+        if self.report_cost:
+            # OpenRouter adds the charged cost to `usage` when asked.
+            body["usage"] = {"include": True}
+        with trace.get_tracer(__name__).start_as_current_span("llm.chat", kind=SpanKind.CLIENT) as span:
+            span.set_attributes({"gen_ai.request.model": self.model, "gen_ai.tools": bool(tools),
+                                 "gen_ai.messages": len(messages)})
+            started = time.monotonic()
+            try:
+                resp = self.client.post("/chat/completions", json=body,
+                                        timeout=min(settings.llm_timeout_s, timeout_s)
+                                        if timeout_s is not None else settings.llm_timeout_s)
+                resp.raise_for_status()
+                data = resp.json()
+                # Preserve the same message shape regardless of whether the endpoint is
+                # the local stub or OpenRouter.
+                msg = data["choices"][0]["message"]
+            except Exception as exc:
+                usage.record(self.model, None, time.monotonic() - started, outcome=type(exc).__name__)
+                span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+                raise
+            msg["usage"] = data.get("usage") or {}
+            entry = usage.record(data.get("model") or self.model, msg["usage"], time.monotonic() - started)
+            span.set_attributes({"gen_ai.usage.input_tokens": entry["prompt_tokens"],
+                                 "gen_ai.usage.output_tokens": entry["completion_tokens"],
+                                 "llm.cost_usd": entry["cost_usd"], "run.step": entry["step"]})
+            return msg
 
 
 class ResilientLLM:
@@ -201,6 +221,7 @@ class ResilientLLM:
             left = remaining()
             if self.breaker.state != "closed" or attempt + 1 >= settings.retry_max:
                 return False
+            LLM_RETRIES.labels(self.breaker.name).inc()
             delay = min(8, 0.5 * 2 ** attempt) + random.uniform(0, 0.3)
             time.sleep(min(delay, left) if left is not None else delay)
             return True
@@ -232,6 +253,7 @@ class ResilientLLM:
         except CircuitOpen:
             if self.fallback is None:
                 raise
+            LLM_FALLBACKS.labels(self.breaker.name).inc()
             return self.fallback.chat(messages, tools, timeout_s=remaining())
 
 
@@ -252,6 +274,7 @@ def get_llm() -> LLM:
             settings.openrouter_base_url,
             settings.llm_model_fallback,
             settings.openrouter_api_key,
+            report_cost=True,
         )
         if settings.llm_model_fallback
         else None
@@ -260,5 +283,6 @@ def get_llm() -> LLM:
         settings.openrouter_base_url,
         settings.llm_model_primary,
         settings.openrouter_api_key,
+        report_cost=True,
     )
     return ResilientLLM(primary, fallback, provider_name=settings.llm_provider)

@@ -220,6 +220,7 @@ class RunState(TypedDict, total=False):
     started_at: float  # monotonic clock, local to the worker process
     budget_exceeded: bool
     tool_calls: int
+    llm_calls: list[dict]  # per-call tokens/cost tagged with the node (#33)
     trace: list[dict[str, object]]
     result: dict[str, object]
 

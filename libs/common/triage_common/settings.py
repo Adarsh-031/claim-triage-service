@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     llm_model_primary: str = ""
     llm_model_fallback: str = ""
     llm_timeout_s: float = 20
+    # USD per million tokens, used only when the provider reports no cost (free models: 0).
+    llm_price_prompt_per_mtok: float = 0.0
+    llm_price_completion_per_mtok: float = 0.0
     tool_timeout_s: float = 5
 
     agent_max_steps: int = 12

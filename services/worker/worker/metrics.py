@@ -15,3 +15,18 @@ LLM_BREAKER_STATE = Gauge(
     "LLM provider breaker state: 0=closed, 1=open, 2=half-open",
     ["provider"],
 )
+
+# LLM usage (#33). Model names come from configuration, so the label set stays bounded.
+LLM_CALLS = Counter("llm_calls_total", "Provider calls", ["model", "outcome"])
+LLM_TOKENS = Counter("llm_tokens_total", "Tokens by model and kind", ["model", "kind"])
+LLM_COST = Counter("llm_cost_usd_total", "LLM cost in USD", ["model"])
+LLM_LATENCY = Histogram("llm_call_duration_seconds", "Provider call latency", ["model"],
+                        buckets=(.1, .5, 1, 2, 5, 10, 20, 45))
+LLM_RETRIES = Counter("llm_retries_total", "Primary-model retries after a failure", ["provider"])
+LLM_FALLBACKS = Counter("llm_fallbacks_total", "Calls served by the fallback model", ["provider"])
+RUN_TOKENS = Histogram("agent_run_tokens", "Prompt + completion tokens per run",
+                       buckets=(0, 500, 1000, 2000, 5000, 10000, 20000, 50000))
+RUN_COST = Histogram("agent_run_cost_usd", "LLM cost per run in USD",
+                     buckets=(0, 0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5))
+RUN_LLM_CALLS = Histogram("agent_run_llm_calls", "Provider calls per run", buckets=(0, 1, 2, 3, 5, 8, 12, 20))
+VERIFIER_RETRIES = Counter("agent_verifier_retries_total", "Verify -> research retry rounds")
