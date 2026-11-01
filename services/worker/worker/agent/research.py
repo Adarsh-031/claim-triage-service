@@ -231,6 +231,10 @@ def provision_conflict(state: dict) -> list[str]:
     return [car["chunk_id"], airline["chunk_id"]] if car and airline else []
 
 
+MEALS_ENTITLEMENT = "Meals and refreshments in relation to waiting time (CAR 3.8.1(a))"
+DECLINE_IRRELEVANT_FIELDS = frozenset({"stated_cause"})
+
+
 def make_draft(state: dict) -> dict:
     cited = citations(state)
     if conflict := provision_conflict(state):
@@ -265,14 +269,20 @@ def make_draft(state: dict) -> dict:
     summary = ("Cancellation compensation declined: alternate accepted (CAR 3.3.1, 3.3.2)."
                if accepted_alternate_decline else
                "Further evidence or eligibility review is needed before determining compensation.")
+    entitlements = []
     if (not missing_sources and state["claim"].get("disruption_type") == "cancellation" and accepted
             and state["claim"].get("reported_at_airport") is True
             and (field_value(state["claim"], "alternate.departure_delay_minutes") or 0) > 0):
         summary += " Meals and refreshments are owed in relation to waiting time (CAR 3.3.2, 3.8.1(a))."
-    missing_fields = sorted({f for item in state["checklist"].values() for f in item["missing_fields"]}
-                            | set(computation.get("missing_fields", [])))
+        entitlements.append(MEALS_ENTITLEMENT)
+    missing_fields = {f for item in state["checklist"].values() for f in item["missing_fields"]} | set(
+        computation.get("missing_fields", []))
+    if accepted_alternate_decline:
+        # The cause only matters for compensation, which an accepted alternate already rules out.
+        missing_fields -= DECLINE_IRRELEVANT_FIELDS
+    missing_fields = sorted(missing_fields)
     if missing_fields:
         summary += " Missing evidence: " + ", ".join(missing_fields) + "."
     # No model-authored amount or summary is copied into the consequential draft.
-    return {"route": route, "summary": summary, "citations": cited,
+    return {"route": route, "summary": summary, "citations": cited, "entitlements": entitlements,
             "amount": computation["amount"] if accepted_alternate_decline else None}

@@ -205,6 +205,7 @@
       if (run.error) card.append(element("p", "error", run.error));
       const amount = recommendation.compensation_inr ?? recommendation.amount;
       if (amount !== null && amount !== undefined) card.append(element("p", "", `Amount: ${formatAmount(amount)}`));
+      for (const entitlement of recommendation.entitlements || []) card.append(element("p", "", `Also owed: ${entitlement}`));
       if (recommendation.escalation_reason) card.append(element("p", "", `Escalation reason: ${recommendation.escalation_reason}`));
       result.append(card);
 

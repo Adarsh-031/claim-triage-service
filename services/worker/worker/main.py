@@ -149,6 +149,7 @@ def _handle(job: dict) -> bool:
                 route=result.route,
                 summary=result.summary,
                 compensation_inr=result.amount,
+                entitlements=getattr(result, "entitlements", []),
                 citations=result.citations,
                 escalation_reason=result.escalation_reason,
                 # Only the graph's finalize step can mark a published draft as verified.
