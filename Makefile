@@ -4,6 +4,7 @@ EVAL_ARGS ?=
 up:        ; docker compose up --build
 down:      ; docker compose down
 scale:     ; docker compose up --build --scale worker=3
+loadtest:  ; scripts/loadtest.sh
 ingest:    ; uv run python cli/ingest.py
 index:     ; uv run python cli/index_corpus.py
 index-check: ; uv run python cli/index_corpus.py --verify
