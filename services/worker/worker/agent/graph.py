@@ -14,6 +14,7 @@ from uuid import uuid4
 import httpx
 from langgraph.graph import END, StateGraph
 from opentelemetry import trace
+from triage_common import guardrails
 from triage_common.contracts import EscalationReason, Result, Route, RunState
 from triage_common.settings import settings
 
@@ -88,7 +89,17 @@ def intake(state: RunState) -> RunState:
     state.setdefault("corpus_version", "unavailable")
     claim = state["claim"]
     extracted = None
-    if not is_in_scope_route(str(claim.get("origin") or "")):
+    # Defence in depth: the API screens before queueing, and the worker screens again
+    # because it is the last step before a model sees the free text.
+    hits = guardrails.screen_input(claim)
+    withheld = guardrails.withheld_fields(hits)
+    if hits:
+        _log(state, "guardrail", stage="input", hits=[h.as_dict() for h in hits],
+             blocked=guardrails.blocked(hits), withheld=sorted(withheld))
+    if guardrails.blocked(hits):
+        state["draft"] = {"route": Route.ESCALATE, "escalation_reason": EscalationReason.GUARDRAIL_BLOCKED,
+                          "summary": guardrails.block_summary(hits)}
+    elif not is_in_scope_route(str(claim.get("origin") or "")):
         state["draft"] = {
             "route": Route.ESCALATE,
             "summary": "The route is outside the India-focused source corpus. Routed to a human officer.",
@@ -100,7 +111,10 @@ def intake(state: RunState) -> RunState:
             if llm is None:
                 llm = LocalStructuredStubLLM() if settings.llm_provider == "stub" else get_llm()
             remaining = settings.agent_run_timeout_s - (time.monotonic() - state["started_at"])
-            facts = extract_intake(claim, llm=llm, timeout_s=remaining)
+            # A narrative carrying instructions is withheld: intake extracts from the
+            # structured form fields only, which are canonical anyway.
+            intake_input = {k: v for k, v in claim.items() if k not in withheld}
+            facts = extract_intake(intake_input, llm=llm, timeout_s=remaining)
             # Research tools, checklists and calculations must see the same reconciled facts.
             state["claim"] = reconcile_claim(claim, facts)
             extracted = facts.model_dump()
@@ -337,6 +351,15 @@ def finalize(state: RunState) -> RunState:
                 {"citations": [c]}, state)["failures"]],
         }
         state["verified"] = False
+    if draft.get("route") != Route.ESCALATE:
+        # Output filter: the last gate before a determination is published.
+        computation = state.get("compensation") or {}
+        computed = computation.get("amount") if computation.get("status") == "computed" else None
+        if hits := guardrails.screen_output(draft, computed):
+            _log(state, "guardrail", stage="output", hits=[h.as_dict() for h in hits], blocked=True)
+            draft = {"route": Route.ESCALATE, "escalation_reason": EscalationReason.GUARDRAIL_BLOCKED,
+                     "summary": guardrails.block_summary(hits)}
+            state["verified"] = False
     result = Result(
         **draft, run_id=state["run_id"],
         prompt_version=f"{INTAKE_PROMPT_VERSION}+{PROMPT_VERSION}+{state['prompt_version']}",

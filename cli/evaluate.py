@@ -131,9 +131,14 @@ def run_scenario(client, api, path, prompt_version, poll_interval, chunks=None, 
         steps = trace_payload.get("steps", [])
         intake = next((s for s in steps if s.get("step") == "intake"), {})
         executed = intake.get("prompt_version")
+        # A claim the API guardrail blocked never reached a worker or a model, so there is
+        # no intake step to confirm the prompt or corpus version against.
+        api_blocked = bool(steps) and steps[0].get("step") == "guardrail" and steps[0].get("service") == "api"
+        if api_blocked:
+            executed = steps[0].get("prompt_version")
         if executed != prompt_version:
             raise ValueError("Run trace does not confirm requested prompt version; update API and worker")
-        if corpus_version is not None and intake.get("corpus_version") != corpus_version:
+        if corpus_version is not None and not api_blocked and intake.get("corpus_version") != corpus_version:
             raise ValueError("Local corpus differs from the worker corpus; citation scores would be invalid")
         correct = result["route"] == expected["route"]
         if expected.get("escalation_reason"):
