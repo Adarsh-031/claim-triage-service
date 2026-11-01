@@ -1,6 +1,6 @@
 {
   "uid": "triage-agents",
-  "title": "Triage \u2014 Agents",
+  "title": "Triage — Agents",
   "schemaVersion": 39,
   "version": 1,
   "editable": false,
@@ -277,6 +277,288 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Mean LLM cost per run (USD)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_run_cost_usd_sum[5m])) / clamp_min(sum(rate(agent_run_cost_usd_count[5m])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "cost/run"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Mean tokens per run",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_run_tokens_sum[5m])) / clamp_min(sum(rate(agent_run_tokens_count[5m])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "tokens/run"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "LLM tokens / second by model",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum by (model, kind) (rate(llm_tokens_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{model}} {{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "LLM calls / second by outcome",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum by (model, outcome) (rate(llm_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{model}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "LLM call latency p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_call_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Retries, fallbacks, verifier retries / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_retries_total[5m]))",
+          "refId": "A",
+          "legendFormat": "LLM retries"
+        },
+        {
+          "expr": "sum(rate(llm_fallbacks_total[5m]))",
+          "refId": "B",
+          "legendFormat": "fallbacks"
+        },
+        {
+          "expr": "sum(rate(agent_verifier_retries_total[5m]))",
+          "refId": "C",
+          "legendFormat": "verifier retries"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Circuit breaker state (0 closed, 1 open, 2 half-open)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "targets": [
+        {
+          "expr": "max by (provider) (llm_circuit_breaker_state)",
+          "refId": "A",
+          "legendFormat": "{{provider}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "Mean LLM calls per run",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_run_llm_calls_sum[5m])) / clamp_min(sum(rate(agent_run_llm_calls_count[5m])), 1e-9)",
+          "refId": "A",
+          "legendFormat": "calls/run"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
         },
         "overrides": []
       },

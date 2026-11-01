@@ -24,6 +24,7 @@ from opentelemetry.trace import SpanKind
 from prometheus_client import Counter, start_http_server
 from triage_common.cache import cache_set, cacheable_result, run_cache_key
 from triage_common.contracts import Recommendation, Result, Route, RunStatus
+from triage_common.logs import configure_logging, log_context
 from triage_common.settings import settings
 from triage_common.store import (
     claim_draft,
@@ -43,7 +44,7 @@ from .agent.graph import dump_state, load_state, verify_once
 from .metrics import RUNS
 from .tools.corpus import get_corpus
 
-logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
+configure_logging("verifier-worker")
 log = logging.getLogger("verifier-worker")
 
 PROCESSING_SUFFIX = ":processing"
@@ -80,7 +81,7 @@ def handle(job: dict) -> bool:
         attributes={"run_id": job["run_id"], "correlation_id": job.get("cid", ""),
                     "messaging.system": "redis", "messaging.destination.name": settings.verify_queue_name,
                     "host.name": socket.gethostname()},
-    ):
+    ), log_context(job["run_id"]):
         return _handle(job)
 
 

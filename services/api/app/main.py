@@ -31,6 +31,7 @@ from triage_common.contracts import (
     RunStatus,
     SubmitOut,
 )
+from triage_common.logs import configure_logging
 from triage_common.settings import settings
 from triage_common.store import (
     Feedback,
@@ -58,6 +59,7 @@ SUBMIT_LATENCY = Histogram("submit_latency_seconds", "Latency of POST /v1/claims
 RATE_LIMIT_REDIS_ERRORS = Counter(
     "rate_limit_redis_errors_total", "Rate limit checks unavailable because Redis failed"
 )
+configure_logging("triage-api")
 log = logging.getLogger("triage-api")
 
 
@@ -235,7 +237,11 @@ def get_run_trace(run_id: uuid.UUID):
     run = get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
-    return {"run_id": str(run.id), "steps": run.trace or []}
+    steps = run.trace or []
+    final = next((s for s in reversed(steps) if s.get("step") == "finalize"), {})
+    # Tokens and cost were recorded per call at the time of the call (finalize sums them).
+    return {"run_id": str(run.id), "status": run.status, "steps": steps,
+            "usage": final.get("usage"), "llm_calls": final.get("llm_calls", [])}
 
 
 @app.post("/v1/runs/{run_id}/feedback", status_code=201)

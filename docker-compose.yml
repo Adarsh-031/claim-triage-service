@@ -151,6 +151,20 @@ services:
       retries: 5
       start_period: 10s
 
+  # Container CPU/memory for Grafana (#33). Read-only host mounts; on Docker Desktop
+  # (Mac/Windows) /var/lib/docker is inside the VM and the mount is simply empty.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command: ["--docker_only=true", "--housekeeping_interval=10s", "--store_container_labels=true"]
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports: ["8088:8080"]
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.54.0
     volumes: ["./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]

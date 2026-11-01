@@ -1,6 +1,6 @@
 {
   "uid": "triage-services",
-  "title": "Triage \u2014 Services",
+  "title": "Triage — Services",
   "schemaVersion": 39,
   "version": 1,
   "editable": false,
@@ -214,6 +214,108 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Container CPU (cores) by service",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service!=\"\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "{{container_label_com_docker_compose_service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Container memory (working set) by service",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (container_memory_working_set_bytes{container_label_com_docker_compose_service!=\"\"})",
+          "refId": "A",
+          "legendFormat": "{{container_label_com_docker_compose_service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Guardrail blocks / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, kind, rule) (rate(guardrail_blocks_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{stage}} {{kind}} {{rule}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
         },
         "overrides": []
       },

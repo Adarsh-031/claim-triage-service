@@ -18,7 +18,8 @@ from triage_common import guardrails
 from triage_common.contracts import EscalationReason, Result, Route, RunState
 from triage_common.settings import settings
 
-from ..metrics import NODE_LATENCY
+from .. import usage
+from ..metrics import NODE_LATENCY, RUN_COST, RUN_LLM_CALLS, RUN_TOKENS, VERIFIER_RETRIES
 from ..tools.corpus import get_corpus
 from . import verifier
 from .intake import (
@@ -60,8 +61,9 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
         state["step_count"] = state.get("step_count", 0) + 1
         if not _budget_exceeded(state):
             with trace.get_tracer(__name__).start_as_current_span(f"agent.{node.__name__}"), \
-                    NODE_LATENCY.labels(node.__name__).time():
+                    NODE_LATENCY.labels(node.__name__).time(), usage.collect(state, node.__name__) as calls:
                 state = node(state)
+            state["llm_calls"] = calls
         _budget_exceeded(state)
         return state
 
@@ -78,8 +80,10 @@ def _timed(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunStat
             state["budget_exceeded"] = True
             return state
         with trace.get_tracer(__name__).start_as_current_span(f"agent.{node.__name__}"), \
-                NODE_LATENCY.labels(node.__name__).time():
-            return node(state)
+                NODE_LATENCY.labels(node.__name__).time(), usage.collect(state, node.__name__) as calls:
+            state = node(state)
+        state["llm_calls"] = calls
+        return state
 
     return invoke
 
@@ -301,6 +305,7 @@ def verify_route(state: RunState) -> str:
 def retry(state: RunState) -> RunState:
     """Retry 1 follows cross-references; retry 2 runs BM25 searches. Then re-draft."""
     state["attempts"] = state.get("attempts", 0) + 1
+    VERIFIER_RETRIES.inc()
     strategy, expand = verifier.RETRIES[state["attempts"]]
     try:
         found = expand(state)
@@ -367,7 +372,17 @@ def finalize(state: RunState) -> RunState:
     )
     state["result"] = result.model_dump(mode="json")
     state["verified"] = bool(state.get("verified")) and result.route is not Route.ESCALATE
-    _log(state, "finalize", step_count=state.get("step_count", 0), verified=state["verified"],
+    calls = state.get("llm_calls") or []
+    run_usage = usage.totals(calls)
+    RUN_TOKENS.observe(run_usage["prompt_tokens"] + run_usage["completion_tokens"])
+    RUN_COST.observe(run_usage["cost_usd"])
+    RUN_LLM_CALLS.observe(run_usage["llm_calls"])
+    with suppress(Exception):
+        span = trace.get_current_span()
+        span.set_attributes({"run.cost_usd": run_usage["cost_usd"], "run.llm_calls": run_usage["llm_calls"],
+                             "run.tokens": run_usage["prompt_tokens"] + run_usage["completion_tokens"]})
+    _log(state, "finalize", usage=run_usage, llm_calls=calls,
+         step_count=state.get("step_count", 0), verified=state["verified"],
          verifier_attempts=state.get("attempts", 0),
          tool_calls=state.get("tool_calls", 0), escalation_reason=result.escalation_reason)
     return state

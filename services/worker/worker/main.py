@@ -17,6 +17,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
 from triage_common.cache import cache_get, cache_set, cacheable_result, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
+from triage_common.logs import configure_logging, log_context
 from triage_common.settings import settings
 from triage_common.store import (
     claim_run,
@@ -35,7 +36,7 @@ from .agent.graph import dump_state, load_state, resume_until_handoff, run_agent
 from .metrics import ACTIVE, CACHE_HITS, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
 from .tools.corpus import get_corpus
 
-logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","msg":%(message)s}')
+configure_logging("agent-worker")
 log = logging.getLogger("worker")
 
 PROCESSING_SUFFIX = ":processing"
@@ -63,7 +64,7 @@ def handle(job: dict) -> bool:
             "messaging.system": "redis",
             "messaging.destination.name": settings.queue_name,
         },
-    ), ACTIVE.track_inprogress(), RUN_LATENCY.time():
+    ), ACTIVE.track_inprogress(), RUN_LATENCY.time(), log_context(job["run_id"]):
         return _handle(job)
 
 
