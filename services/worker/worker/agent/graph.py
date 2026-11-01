@@ -26,6 +26,7 @@ from .intake import (
 from .intake import IntakeError, LocalStructuredStubLLM, extract_intake, is_in_scope_route, reconcile_claim
 from .llm import CircuitOpen, get_llm
 from .research import TOOLS, checklist, collect_chunks, execute_tool, make_draft, research_facts, validate_report
+from .research import citations as decision_citations
 
 PROMPT_VERSION = "research-v1"
 PROMPT_PATH = Path(__file__).resolve().parents[4] / "prompts" / "research_v1.md"
@@ -261,7 +262,9 @@ def verify(state: RunState) -> RunState:
         _escalate(state, EscalationReason.PROVISION_CONFLICT,
                   "IndiGo's terms may give this passenger less protection than CAR: "
                   + str((outcome.get("comparison") or {}).get("reason", "")) + " Human review required.",
-                  [c for c in draft.get("citations", []) if c["chunk_id"] in comparison_ids])
+                  # The draft cites only its own decision, so take the compared provisions
+                  # from everything the checklist relied on.
+                  [c for c in decision_citations(state) if c["chunk_id"] in comparison_ids])
     elif outcome["verified"]:
         state["verified"] = True
         state["verified_draft"] = draft

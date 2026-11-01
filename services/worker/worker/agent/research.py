@@ -1,6 +1,7 @@
 """Research tool registry and deterministic evidence coverage/decision gates."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -200,12 +201,27 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
     return results
 
 
-def citations(state: dict) -> list[dict]:
-    """Cite the chunks the checklist relies on; other retrieved context is not a citation."""
-    relied = {key for entry in (state.get("checklist") or {}).values() for key in entry.get("chunk_ids", [])}
-    return [Citation(chunk_id=c["chunk_id"], doc_id=c["doc_id"], clause_id=c["clause_id"],
-                     quote=c["text"]).model_dump(mode="json") for c in state.get("retrieved", [])
-            if not relied or c["chunk_id"] in relied]
+def citations(state: dict, items: Iterable[str] | None = None) -> list[dict]:
+    """Cite the chunks the checklist relies on; other retrieved context is not a citation.
+
+    ``items`` narrows the citations to the checklist items a decision rests on, so a
+    payout cites its payout clauses rather than every clause the research audited.
+    Each chunk is cited once, even when retrieval returned it in several rounds.
+    """
+    checklist = state.get("checklist") or {}
+    entries = checklist.values() if items is None else (checklist[i] for i in items if i in checklist)
+    relied = {key for entry in entries for key in entry.get("chunk_ids", [])}
+    if items is not None and not relied:
+        return []
+    seen: set[str] = set()
+    cited = []
+    for c in state.get("retrieved", []):
+        if c["chunk_id"] in seen or (relied and c["chunk_id"] not in relied):
+            continue
+        seen.add(c["chunk_id"])
+        cited.append(Citation(chunk_id=c["chunk_id"], doc_id=c["doc_id"], clause_id=c["clause_id"],
+                              quote=c["text"]).model_dump(mode="json"))
+    return cited
 
 
 def provision_conflict(state: dict) -> list[str]:
@@ -230,6 +246,11 @@ def provision_conflict(state: dict) -> list[str]:
                     and "mechanical, technical, or operational issues or failures" in c["text"].casefold()), None)
     return [car["chunk_id"], airline["chunk_id"]] if car and airline else []
 
+
+# The checklist items each substantive decision rests on. REQUEST_EVIDENCE keeps the
+# whole checklist, because the officer needs every gap and its source.
+PAY_CANCELLATION_ITEMS = ("notice_period", "alternate_offered_accepted", "contact_details")
+DECLINE_ACCEPTED_ALTERNATE_ITEMS = ("notice_period", "alternate_offered_accepted")
 
 MEALS_ENTITLEMENT = "Meals and refreshments in relation to waiting time (CAR 3.8.1(a))"
 DECLINE_IRRELEVANT_FIELDS = frozenset({"stated_cause"})
@@ -258,7 +279,8 @@ def make_draft(state: dict) -> dict:
             and computation.get("status") == "computed" and (computation.get("amount") or 0) > 0
             and state["claim"].get("contact_info_provided") is True and not state["claim"].get("stated_cause")):
         # No alternate taken, contact details given, no extraordinary cause claimed.
-        return {"route": Route.PAY, "citations": cited, "amount": computation["amount"],
+        return {"route": Route.PAY, "citations": citations(state, PAY_CANCELLATION_ITEMS),
+                "amount": computation["amount"],
                 "summary": (f"Cancellation compensation of INR {computation['amount']} is due for late notice "
                             "with no alternate taken (CAR 3.3.1, 3.3.2). "
                             "A claims officer must approve any payment.")}
@@ -269,12 +291,14 @@ def make_draft(state: dict) -> dict:
     summary = ("Cancellation compensation declined: alternate accepted (CAR 3.3.1, 3.3.2)."
                if accepted_alternate_decline else
                "Further evidence or eligibility review is needed before determining compensation.")
+    decision_items = list(DECLINE_ACCEPTED_ALTERNATE_ITEMS)
     entitlements = []
     if (not missing_sources and state["claim"].get("disruption_type") == "cancellation" and accepted
             and state["claim"].get("reported_at_airport") is True
             and (field_value(state["claim"], "alternate.departure_delay_minutes") or 0) > 0):
         summary += " Meals and refreshments are owed in relation to waiting time (CAR 3.3.2, 3.8.1(a))."
         entitlements.append(MEALS_ENTITLEMENT)
+        decision_items.append("meals_facilities")
     missing_fields = {f for item in state["checklist"].values() for f in item["missing_fields"]} | set(
         computation.get("missing_fields", []))
     if accepted_alternate_decline:
@@ -284,5 +308,7 @@ def make_draft(state: dict) -> dict:
     if missing_fields:
         summary += " Missing evidence: " + ", ".join(missing_fields) + "."
     # No model-authored amount or summary is copied into the consequential draft.
+    if accepted_alternate_decline:
+        cited = citations(state, decision_items)
     return {"route": route, "summary": summary, "citations": cited, "entitlements": entitlements,
             "amount": computation["amount"] if accepted_alternate_decline else None}
