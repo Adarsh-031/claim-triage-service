@@ -280,3 +280,19 @@ def test_each_verifier_attempt_is_stored_as_a_row(monkeypatch):
         rows = session.scalars(select(store.VerifierOutcome)).all()
     assert len(rows) == 1 and rows[0].run_id == run_id and rows[0].verified is True
     assert "quotes_grounded" in rows[0].passed_checks and rows[0].failed_checks == []
+
+
+# --- Decision citations ---------------------------------------------------------------
+
+def test_pay_cites_only_payout_clauses_once():
+    result, _ = graph.run_agent(S05["claim"])
+    assert result.route is Route.PAY and isinstance(result.amount, int)
+    chunk_ids = [c.chunk_id for c in result.citations]
+    assert len(chunk_ids) == len(set(chunk_ids))
+    assert {c.clause_id for c in result.citations} == {"3.3.1", "3.3.2", "3.3.3"}
+
+
+def test_accepted_alternate_decline_cites_decision_and_meals_clauses():
+    result, _ = graph.run_agent(S01["claim"])
+    assert result.route is Route.DECLINE
+    assert {c.clause_id for c in result.citations} == {"3.3.1", "3.3.2", "3.8.1(a)"}

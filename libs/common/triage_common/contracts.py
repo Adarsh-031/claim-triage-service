@@ -174,7 +174,7 @@ class Result(BaseModel):
     route: Route
     summary: str
     citations: list[Citation] = Field(default_factory=list)
-    amount: float | None = Field(default=None, ge=0)
+    amount: int | None = Field(default=None, ge=0)  # whole rupees from compute_compensation
     # Non-monetary entitlements owed regardless of compensation (e.g. meals under CAR 3.8.1(a)).
     entitlements: list[str] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
@@ -234,7 +234,7 @@ class Recommendation(BaseModel):
     route: Route
     summary: str
     entitlements: list[str] = Field(default_factory=list)
-    compensation_inr: float | None = None  # computed by code, never by the LLM
+    compensation_inr: int | None = None  # whole rupees, computed by code, never by the LLM
     citations: list[Citation] = Field(default_factory=list)
     escalation_reason: EscalationReason | None = None
     verified: bool = False
