@@ -98,12 +98,31 @@ deploy/            Prometheus, Grafana provisioning
 docs/              Requirements, design, report material, runbooks, incident log
 ```
 
+## Retrieval
+
+The research agent's `search_corpus` and `get_clause` are LangChain tools
+(`services/worker/worker/tools/retrieval.py`); their docstrings are what the model reads.
+
+- `mode="hybrid"` (default): Chroma (MiniLM, the index ingest builds) and in-memory BM25 over
+  `chunks.jsonl`, fused by reciprocal rank. A subclause hit also credits its parent, so the
+  3.3.2(a)-(c) tiers surface 3.3.2; a clause number in the query (`3.8.1(a)`) ranks first.
+- `mode="vector"` / `mode="bm25"`: one retriever only.
+- Returned text always comes from `chunks.jsonl`, never from Chroma. An index whose hashes
+  differ from the processed corpus is treated as unavailable.
+- Chroma calls time out after `RETRIEVAL_TIMEOUT_S` (5 s). Hybrid then falls back to BM25
+  (results say `retrieval: bm25_fallback`) and skips Chroma for `RETRIEVAL_COOLDOWN_S`.
+  `CHROMA_URL=` (empty) disables vector search, as in tests and CI.
+
+Measure it with `uv run python -m scripts.eval_retrieval` (hit@3 per mode over
+`eval/retrieval/queries.yaml`; run inside the stack or with `CHROMA_URL` pointing at it).
+On the current corpus: hybrid 13/14, BM25 8/14, vector 6/14.
+
 ## Status
 
 | Priority | Item | State |
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
-| P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing and retrieval checks |
+| P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing; agent retrieval is hybrid Chroma + BM25 |
 | P0 | Bounded research tool loop, cited demo case 4.1 | processed corpus, checklists and conflict escalation implemented; grounding verifier pending |
 | P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
 | P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | service/agent dashboards provisioned; scaling/cache/prompt studies pending |

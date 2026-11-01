@@ -44,6 +44,7 @@ jobs:
           STUB_DELAY: '0'
           RATE_LIMIT_PER_MIN: '1000'
           OTEL_SDK_DISABLED: 'true'
+          CHROMA_URL: ''  # no Chroma in CI: hybrid search degrades to BM25
         run: |
           export CORPUS_DIR="$RUNNER_TEMP/eval-corpus"
           echo "CORPUS_DIR=$CORPUS_DIR" >> "$GITHUB_ENV"
@@ -66,6 +67,7 @@ jobs:
           STUB_DELAY: '0'
           RATE_LIMIT_PER_MIN: '1000'
           OTEL_SDK_DISABLED: 'true'
+          CHROMA_URL: ''  # no Chroma in CI: hybrid search degrades to BM25
         run: >-
           uv run python -m cli.evaluate --semantic off --corpus-dir "$CORPUS_DIR"
           --report eval/results/eval-report.md --timeout 90 --poll-interval 0.1
