@@ -117,7 +117,7 @@ def run_scenario(client, api, path, prompt_version, poll_interval, chunks=None, 
                 break
             if status == "failed":
                 raise ValueError("Worker failed; this is not a completed recommendation")
-            if status not in {"queued", "running"}:
+            if status not in {"queued", "running", "verifying"}:
                 raise ValueError("Unknown run status")
             remaining = deadline - time.monotonic()
             if remaining <= 0:

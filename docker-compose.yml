@@ -27,13 +27,15 @@ services:
       - embedding_cache:/root/.cache/chroma
     environment:
       CORPUS_DIR: ${CORPUS_DIR:-/src/corpus/processed}
+      VERIFIER_MODE: split
+    restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       chroma: { condition: service_healthy }
       llm-stub: { condition: service_healthy }
       ingest: { condition: service_completed_successfully }
-    healthcheck:
+    healthcheck: &worker-health
       test:
         - CMD
         - python
@@ -43,6 +45,25 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # Grounding verifier (#27) in its own process (#28): same image, different entrypoint.
+  # Hand-off: agent-worker stores a drafts row and pushes run_id to triage:verify.
+  verifier-worker:
+    build: { context: ., dockerfile: services/worker/Dockerfile }
+    <<: *app-env
+    command: ["python", "-m", "worker.verifier_main"]
+    volumes:
+      - ./corpus:/src/corpus:ro
+    environment:
+      CORPUS_DIR: ${CORPUS_DIR:-/src/corpus/processed}
+      VERIFIER_MODE: split
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      llm-stub: { condition: service_healthy }
+      ingest: { condition: service_completed_successfully }
+    healthcheck: *worker-health
 
   web:
     build: { context: ., dockerfile: services/web/Dockerfile }

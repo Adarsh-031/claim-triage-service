@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -44,6 +46,13 @@ class Settings(BaseSettings):
     prompt_version: str = "v1"
 
     queue_name: str = "triage:runs"
+    # inline: one worker runs the whole graph. split (#28, Compose): the agent-worker hands the
+    # draft to verifier-worker through a drafts row + verify queue.
+    verifier_mode: Literal["inline", "split"] = "inline"
+    verify_queue_name: str = "triage:verify"
+    verifier_metrics_port: int = 8003
+    # A draft nobody verified within this many seconds escalates instead of waiting forever.
+    verify_wait_s: float = Field(default=120, gt=0)
 
 
 settings = Settings()

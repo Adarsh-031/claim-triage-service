@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -11,24 +12,26 @@ from time import sleep
 
 import redis
 from opentelemetry import trace as otel_trace
-from opentelemetry.propagate import extract
+from opentelemetry.propagate import extract, inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import start_http_server
 from triage_common.cache import cache_get, cache_set, cacheable_result, run_cache_key
-from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
+from triage_common.contracts import EscalationReason, Recommendation, Result, Route, RunStatus
 from triage_common.settings import settings
 from triage_common.store import (
     claim_run,
     finish_run,
     get_run,
+    handoff_draft,
     heartbeat_run,
     init_db,
     record_verifier_outcomes,
     recover_stale_run,
+    take_retry_draft,
 )
 from triage_common.telemetry import configure_tracing
 
-from .agent.graph import run_agent
+from .agent.graph import dump_state, load_state, resume_until_handoff, run_agent, run_until_handoff
 from .metrics import ACTIVE, CACHE_HITS, RUN_LATENCY, RUNS, RUNS_STARTED, STEPS, TOOLS
 from .tools.corpus import get_corpus
 
@@ -103,8 +106,11 @@ def _handle(job: dict) -> bool:
             corpus_version = get_corpus().version
         except (OSError, ValueError):
             corpus_version = None
+        split = settings.verifier_mode == "split"
+        # A run the verifier sent back resumes from its draft instead of starting over.
+        resume = take_retry_draft(run_id, attempt) if split and job.get("resume") else None
         use_cache = settings.cache_enabled and corpus_version is not None
-        if use_cache:
+        if use_cache and resume is None:
             cache_key = run_cache_key(claim, prompt_version, corpus_version, client_scope)
             cached = cache_get(cache_redis, cache_key)
             if cached is not None:
@@ -126,12 +132,19 @@ def _handle(job: dict) -> bool:
                 log.warning("run %s attempt %s lost ownership before cache finalization", run_id, attempt)
                 return False
         try:
-            result, trace = run_agent(
-                claim,
-                correlation_id=job.get("cid", ""),
-                run_id=str(run_id),
-                prompt_version=prompt_version,
-            )
+            if split:
+                state = (resume_until_handoff(load_state(resume)) if resume is not None else run_until_handoff(
+                    claim, correlation_id=job.get("cid", ""), run_id=str(run_id), prompt_version=prompt_version))
+                if state.get("awaiting_verification"):
+                    return _handoff(job, run_id, attempt, state)
+                result, trace = Result.model_validate(state["result"]), state.get("trace", [])
+            else:
+                result, trace = run_agent(
+                    claim,
+                    correlation_id=job.get("cid", ""),
+                    run_id=str(run_id),
+                    prompt_version=prompt_version,
+                )
             rec = Recommendation(
                 route=result.route,
                 summary=result.summary,
@@ -209,7 +222,43 @@ def _handle(job: dict) -> bool:
         heartbeat_thread.join(timeout=HEARTBEAT_INTERVAL_S + 1)
 
 
+def _handoff(job: dict, run_id: uuid.UUID, attempt: int, state: dict) -> bool:
+    """Store the draft (fenced by attempt), then publish it to the verify queue."""
+    with otel_trace.get_tracer(__name__).start_as_current_span("verify.publish", kind=SpanKind.PRODUCER):
+        if not handoff_draft(run_id, attempt, state.get("attempts", 0), dump_state(state),
+                             host=socket.gethostname(), trace=state.get("trace", [])):
+            log.warning("run %s attempt %s lost ownership before verifier hand-off", run_id, attempt)
+            return False
+        carrier: dict[str, str] = {}
+        inject(carrier)
+        message = {"run_id": str(run_id), "run_attempt": attempt, "cid": job.get("cid", ""),
+                   "client_id": job.get("client_id", "unknown"), "prompt_version": job.get("prompt_version"),
+                   "trace_context": carrier}
+        try:
+            cache_redis.lpush(settings.verify_queue_name, json.dumps(message))
+        except redis.RedisError:
+            # The draft row is durable; expire_waiting_drafts escalates it if no verifier sees it.
+            log.exception("verify queue publish failed for run %s", run_id)
+    log.info(json.dumps({"run_id": str(run_id), "handoff": "verifier", "cid": job.get("cid")}))
+    return True
+
+
 def reap_once(r: redis.Redis) -> dict[str, int]:
+    """Reap the run queue and, in split mode, the verify queue too.
+
+    Covering the verify queue here means a verifier-worker that dies and never comes back
+    still has its claimed draft reclaimed and, after VERIFY_WAIT_S, escalated.
+    """
+    outcome = _reap_runs(r)
+    if settings.verifier_mode == "split":
+        from . import verifier_main
+
+        verify = verifier_main.reap_once(r)
+        outcome = {k: outcome[k] + verify[k] for k in outcome}
+    return outcome
+
+
+def _reap_runs(r: redis.Redis) -> dict[str, int]:
     """Reap entries older than the wall-clock budget, guarded by a Redis lease."""
     lock_key = f"{settings.queue_name}:reaper-lock"
     processing_key = f"{settings.queue_name}{PROCESSING_SUFFIX}"
