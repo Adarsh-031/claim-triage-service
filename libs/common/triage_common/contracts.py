@@ -210,7 +210,9 @@ class RunState(TypedDict, total=False):
     compensation: dict | None
     draft: dict[str, object] | None
     verified: bool
-    attempts: int
+    verified_draft: dict[str, object] | None
+    verifier_outcomes: list[dict]
+    attempts: int  # grounding-verifier retries used (max 2)
     step_count: int
     started_at: float  # monotonic clock, local to the worker process
     budget_exceeded: bool

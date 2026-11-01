@@ -1,6 +1,6 @@
 # Bounded research graph (issue #26)
 
-The worker runs `intake → research ↺ → draft → verify → finalize`. Research calls the
+The worker runs `intake → research ↺ → draft → verify (↺ retry → draft, max 2) → finalize`. Research calls the
 configured OpenAI-compatible provider with the tool definitions and a conversation
 containing previous tool results. Each assistant turn may request several tools.
 Conditional edges continue research, draft when the provider finishes, or finalize an
@@ -70,10 +70,12 @@ from the pinned CAR text fixture and both CoC snapshots. They need no external m
 network service, PDF binary, or pre-existing `corpus/processed` directory.
 
 For s01, `compute_compensation` returns zero because the alternate was accepted.
-The research draft requests further evidence/review because the CAR/CoC relationship
-has not been independently validated; it does not assert a decline or meals entitlement.
-The missing stated cause is recorded explicitly. The scripted run uses 8 work steps
-and 14 tool calls.
+The draft declines cancellation compensation (CAR 3.3.1, 3.3.2) and states that meals
+and refreshments are owed for the airport wait (CAR 3.3.2, 3.8.1(a)). The grounding
+verifier passes it, so the run publishes `decline` with `verified=True`. The missing
+stated cause is recorded explicitly. The scripted run uses 6 model work steps (intake
+and research) and 14 tool calls; draft, verify and retry are deterministic gates bounded
+by the wall clock and the retry limit, not by the model step budget.
 
 For a technical-fault cancellation, CoC `1.1` explicitly lists technical failures while
 CAR `1.4` requires beyond-control and reasonable-measures evidence. The worker refers
@@ -81,17 +83,16 @@ this potential lower-protection interpretation as `PROVISION_CONFLICT`, with bot
 citations. It does not conclude that every technical fault qualifies for compensation.
 Provider comparisons must cite CAR `1.4`/`1.5` and IndiGo `1.1`/`14.2`, with all six
 comparison clauses retrieved across CAR and both CoC snapshots. Unrelated retrieved
-chunks are rejected. Even relevant citations only establish coverage: model-authored
-`compatible` and `conflict` reports become `missing` pending independent relationship
-validation, and the comparison checklist remains missing. Such reports cannot trigger
-`PROVISION_CONFLICT`; only the deterministic technical-fault review condition above can.
-The s21 expected route reflects the explicit escalation requirement in issue #26.
+chunks are rejected. Research coverage only establishes that the sources were read:
+model-authored `compatible` and `conflict` reports are discarded and the checklist item
+becomes `needs_verification`. The grounding verifier then compares the wording itself;
+if it finds lower protection the run escalates as `PROVISION_CONFLICT`.
 
-The separate grounding verifier is still pending. `verify` leaves `verified=False`,
-and finalization converts every consequential draft into `VERIFICATION_FAILED` with
-an explicitly unverified research summary and citations. No final decline/payment is
-published. The worker preserves its existing `Recommendation` API contract, run ID,
-`verified=False`, and `requires_human_approval=True`.
+Grounding verification (#27) is described in `docs/verifier.md`. Only the exact draft the
+verifier passed can publish a consequential route; anything else escalates as
+`VERIFICATION_FAILED` and keeps only citations whose quotes are in the source text.
+The worker preserves its existing `Recommendation` API contract and run ID, sets
+`verified` from the finalize step, and always keeps `requires_human_approval=True`.
 
 The full calculator in #15/PR #36 is not merged into this branch. A cancellation adapter
 provides structured `status`, `amount`, `formula`, `clause_id`, `inputs_used`, and

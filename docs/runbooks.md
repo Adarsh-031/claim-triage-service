@@ -321,3 +321,14 @@ Older jobs without a trace carrier start a new worker trace; submit a new claim
 to test cross-service correlation. Jaeger all-in-one uses in-memory trace storage,
 so a collector restart discards old traces. `/v1/runs/{run_id}/trace` remains the
 persisted application step log, independently of Jaeger retention.
+
+## Upgrade an existing PostgreSQL volume for the grounding verifier (#27)
+
+Fresh databases get `verifier_outcomes` from `deploy/postgres/init.sql`. For an existing
+volume, apply `deploy/postgres/migrations/20261101_verifier_outcomes.sql` once (it is
+idempotent). Inspect a run's verifier attempts with:
+
+```sql
+SELECT verifier_attempt, verified, failed_checks, passed_checks, created_at
+FROM verifier_outcomes WHERE run_id = '<run-id>' ORDER BY run_attempt, verifier_attempt;
+```

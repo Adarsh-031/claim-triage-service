@@ -17,7 +17,15 @@ from prometheus_client import start_http_server
 from triage_common.cache import cache_get, cache_set, cacheable_result, run_cache_key
 from triage_common.contracts import EscalationReason, Recommendation, Route, RunStatus
 from triage_common.settings import settings
-from triage_common.store import claim_run, finish_run, get_run, heartbeat_run, init_db, recover_stale_run
+from triage_common.store import (
+    claim_run,
+    finish_run,
+    get_run,
+    heartbeat_run,
+    init_db,
+    record_verifier_outcomes,
+    recover_stale_run,
+)
 from triage_common.telemetry import configure_tracing
 
 from .agent.graph import run_agent
@@ -130,7 +138,9 @@ def _handle(job: dict) -> bool:
                 compensation_inr=result.amount,
                 citations=result.citations,
                 escalation_reason=result.escalation_reason,
-                verified=False,
+                # Only the graph's finalize step can mark a published draft as verified.
+                verified=next((t.get("verified") is True for t in reversed(trace)
+                               if t.get("step") == "finalize"), False),
             )
         except Exception as exc:
             span = otel_trace.get_current_span()
@@ -173,6 +183,10 @@ def _handle(job: dict) -> bool:
         if not persisted:
             log.warning("run %s attempt %s lost ownership before finalization", run_id, attempt)
             return False
+        try:
+            record_verifier_outcomes(run_id, attempt, [t for t in trace if t.get("step") == "verify"])
+        except Exception:  # the trace already holds the outcomes; never fail a finished run
+            log.exception("could not store verifier outcomes for run %s", run_id)
 
         reason = rec.escalation_reason.value if rec.escalation_reason else "none"
         RUNS.labels(rec.route.value, reason).inc()

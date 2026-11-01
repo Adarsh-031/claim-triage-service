@@ -169,7 +169,8 @@ def test_relevant_citations_do_not_establish_relationship(status):
     state["research_report"] = validate_report(report, state)
     assert state["research_report"]["comparison"]["status"] == "missing"
     assert "unverified" in state["research_report"]["comparison"]["reason"]
-    assert checklist(state, complete=True)["airline_comparison"]["status"] == "missing"
+    # Coverage is complete, but only the grounding verifier may judge the relationship.
+    assert checklist(state, complete=True)["airline_comparison"]["status"] == "needs_verification"
     assert provision_conflict(state) == []
 
 
@@ -262,7 +263,7 @@ def test_booking_identifiers_absent_from_every_provider_turn(research_env, monke
 
     monkeypatch.setattr(research_env, "chat", inspect)
     graph.run_agent(claim)
-    assert len(requests) == 5  # Initial facts and every repeated tool-loop turn.
+    assert len(requests) == 6  # Five research turns plus the grounding verifier's single call.
     for request in requests:
         assert all(value not in request for value in [*private.values(), "PRIVATE_ALTERNATE_SENTINEL"])
     facts = json.loads(json.loads(requests[0])[1]["content"])["claim"]

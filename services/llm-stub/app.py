@@ -118,6 +118,28 @@ def research_reply(messages: list[dict]) -> dict:
     }})}
 
 
+VERIFIER_MARKER = "You are the grounding verifier"
+
+
+def verifier_reply(messages: list[dict]) -> dict:
+    """Scripted grounding verdicts: a quote supports its sentence if it is non-empty;
+    IndiGo wording is flagged as lower protection only for a technical-fault cause."""
+    payload = json.loads(next((m.get("content") or "{}" for m in messages if m.get("role") == "user"), "{}"))
+    verdict: dict[str, Any] = {"claims": [
+        {"id": c["id"], "supported": bool(str(c.get("quote", "")).strip()), "reason": "scripted stub verdict"}
+        for c in payload.get("claims", [])]}
+    if "comparison" in payload:
+        cause = str((payload["comparison"].get("facts") or {}).get("stated_cause") or "").casefold()
+        verdict["comparison"] = {"lower_protection": "technical" in cause or "mechanical" in cause,
+                                 "reason": "scripted stub comparison"}
+    return {"role": "assistant", "content": json.dumps(verdict)}
+
+
+def is_verifier_request(messages: list[dict]) -> bool:
+    return any(m.get("role") == "system" and str(m.get("content") or "").startswith(VERIFIER_MARKER)
+               for m in messages)
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -138,7 +160,9 @@ async def chat_completions(payload: dict[str, Any], request: Request) -> dict[st
     message = (research_reply(payload.get("messages", [])) if "compute_compensation" in tools
                else {"role": "assistant", "content": STUB_REPLY})
     scripted = _intake_stub_content(request.headers.get("x-stub-scenario"))
-    if scripted is not None and "compute_compensation" not in tools:
+    if is_verifier_request(payload.get("messages", [])):
+        message = verifier_reply(payload["messages"])
+    elif scripted is not None and "compute_compensation" not in tools:
         message = {"role": "assistant", "content": scripted}
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",

@@ -1,4 +1,4 @@
-"""Bounded tool-calling research graph; grounding verification remains a separate gate."""
+"""Bounded tool-calling research graph with a separate grounding verifier gate."""
 from __future__ import annotations
 
 import json
@@ -18,6 +18,7 @@ from triage_common.settings import settings
 
 from ..metrics import NODE_LATENCY
 from ..tools.corpus import get_corpus
+from . import verifier
 from .intake import (
     PROMPT_VERSION as INTAKE_PROMPT_VERSION,
 )
@@ -60,6 +61,22 @@ def _bounded(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunSt
                 state = node(state)
         _budget_exceeded(state)
         return state
+
+    return invoke
+
+
+def _timed(node: Callable[[RunState], RunState]) -> Callable[[RunState], RunState]:
+    """Deterministic draft/verify/retry nodes: bounded by wall clock and MAX_RETRIES, not the
+    model's step and tool budget, so a fully researched claim can always be verified."""
+    @wraps(node)
+    def invoke(state: RunState) -> RunState:
+        state = dict(state)
+        if time.monotonic() - state["started_at"] >= settings.agent_run_timeout_s:
+            state["budget_exceeded"] = True
+            return state
+        with trace.get_tracer(__name__).start_as_current_span(f"agent.{node.__name__}"), \
+                NODE_LATENCY.labels(node.__name__).time():
+            return node(state)
 
     return invoke
 
@@ -215,10 +232,66 @@ def draft(state: RunState) -> RunState:
     return state
 
 
+def _escalate(state: RunState, reason: EscalationReason, summary: str, citations: list | None = None) -> None:
+    state["draft"] = {"route": Route.ESCALATE, "escalation_reason": reason, "summary": summary,
+                      "citations": citations if citations is not None else []}
+
+
 def verify(state: RunState) -> RunState:
-    # A separate grounding verifier is future work; never claim verified=True.
+    draft = dict(state.get("draft") or {})
+    attempt = state.get("attempts", 0)
+    remaining = settings.agent_run_timeout_s - (time.monotonic() - state["started_at"])
     state["verified"] = False
-    _log(state, "verify", mode="pass_through", verified=False)
+    try:
+        with trace.get_tracer(__name__).start_as_current_span("verify.checks"):
+            outcome = verifier.run_checks(draft, state, get_llm(), timeout_s=remaining)
+    except (httpx.HTTPError, CircuitOpen):
+        outcome = {"verified": False, "error": "provider_degraded", "checks": []}
+        _escalate(state, EscalationReason.PROVIDER_DEGRADED,
+                  "Grounding verifier provider unavailable. Human review required.")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        outcome = {"verified": False, "error": type(exc).__name__, "checks": []}
+    outcome = {**outcome, "attempt": attempt}
+    state["verifier_outcomes"] = [*state.get("verifier_outcomes", []), outcome]
+    if outcome.get("lower_protection"):
+        comparison_ids = {c["chunk_id"] for c in state.get("retrieved", [])
+                          if (c["doc_id"], c["clause_id"]) in {(doc, clause)
+                          for doc, clauses in verifier.COMPARISON_CLAUSES.items() for clause in clauses}}
+        _escalate(state, EscalationReason.PROVISION_CONFLICT,
+                  "IndiGo's terms may give this passenger less protection than CAR: "
+                  + str((outcome.get("comparison") or {}).get("reason", "")) + " Human review required.",
+                  [c for c in draft.get("citations", []) if c["chunk_id"] in comparison_ids])
+    elif outcome["verified"]:
+        state["verified"] = True
+        state["verified_draft"] = draft
+    _log(state, "verify", attempt=attempt, verified=state["verified"],
+         prompt_version=verifier.PROMPT_VERSION, llm_called=outcome.get("llm_called", False),
+         lower_protection=outcome.get("lower_protection", False), error=outcome.get("error"),
+         failed=[{"check": c["check"], "failures": c["failures"]} for c in outcome["checks"] if not c["passed"]],
+         passed=[c["check"] for c in outcome["checks"] if c["passed"]])
+    return state
+
+
+def verify_route(state: RunState) -> str:
+    if state.get("verified") or state.get("budget_exceeded"):
+        return "finalize"
+    if (state.get("draft") or {}).get("route") == Route.ESCALATE:
+        return "finalize"
+    return "retry" if state.get("attempts", 0) < verifier.MAX_RETRIES else "finalize"
+
+
+def retry(state: RunState) -> RunState:
+    """Retry 1 follows cross-references; retry 2 runs BM25 searches. Then re-draft."""
+    state["attempts"] = state.get("attempts", 0) + 1
+    strategy, expand = verifier.RETRIES[state["attempts"]]
+    try:
+        found = expand(state)
+    except (OSError, ValueError, KeyError, TypeError):
+        found = []
+    state["retrieved"] = [*state.get("retrieved", []), *found]
+    state["checklist"] = checklist(state, complete=True)
+    _log(state, "verify_retry", attempt=state["attempts"], strategy=strategy,
+         chunk_ids=[c["chunk_id"] for c in found], checklist=state["checklist"])
     return state
 
 
@@ -245,23 +318,30 @@ def finalize(state: RunState) -> RunState:
             "summary": "No draft produced. Routed to a human officer.",
             "escalation_reason": EscalationReason.VERIFICATION_FAILED,
         }
-    elif draft.get("route") != Route.ESCALATE:
-        # Until grounding verification exists, even an injected/replaced draft
-        # must never publish a consequential route through the worker/API.
+    elif draft.get("route") != Route.ESCALATE and not (state.get("verified") and draft == state.get("verified_draft")):
+        # Only the exact draft the verifier passed may publish a consequential route.
+        last = (state.get("verifier_outcomes") or [{}])[-1]
+        failures = [f for c in last.get("checks", []) if not c["passed"] for f in c["failures"]]
         draft = {
             "route": Route.ESCALATE,
-            "summary": "Unverified research draft: " + str(draft.get("summary", "")) +
-                       " Grounding verification is not implemented. No final claim determination made.",
+            "summary": "Grounding verification failed after "
+                       f"{state.get('attempts', 0)} retries: " + ("; ".join(failures[:3]) or "draft not verified") +
+                       ". No final claim determination made.",
             "escalation_reason": EscalationReason.VERIFICATION_FAILED,
-            "citations": draft.get("citations", []),
+            # A citation that failed grounding is never returned.
+            "citations": [c for c in draft.get("citations", []) if not verifier.quotes_grounded(
+                {"citations": [c]}, state)["failures"]],
         }
+        state["verified"] = False
     result = Result(
         **draft, run_id=state["run_id"],
         prompt_version=f"{INTAKE_PROMPT_VERSION}+{PROMPT_VERSION}+{state['prompt_version']}",
         corpus_version=state["corpus_version"],
     )
     state["result"] = result.model_dump(mode="json")
-    _log(state, "finalize", step_count=state.get("step_count", 0),
+    state["verified"] = bool(state.get("verified")) and result.route is not Route.ESCALATE
+    _log(state, "finalize", step_count=state.get("step_count", 0), verified=state["verified"],
+         verifier_attempts=state.get("attempts", 0),
          tool_calls=state.get("tool_calls", 0), escalation_reason=result.escalation_reason)
     return state
 
@@ -274,8 +354,10 @@ def traced_finalize(state: RunState) -> RunState:
 
 def build_graph():
     g = StateGraph(RunState)
-    for name, fn in [("intake", intake), ("research", research), ("draft", draft), ("verify", verify)]:
+    for name, fn in [("intake", intake), ("research", research)]:
         g.add_node(name, _bounded(fn))
+    for name, fn in [("draft", draft), ("verify", verify), ("retry", retry)]:
+        g.add_node(name, _timed(fn))
     g.add_node("finalize", traced_finalize)
     g.set_entry_point("intake")
     g.add_conditional_edges("intake",
@@ -286,7 +368,8 @@ def build_graph():
     g.add_conditional_edges("draft", lambda s: "finalize" if s.get("budget_exceeded")
                             or s.get("draft", {}).get("route") == Route.ESCALATE else "verify",
                             {"finalize": "finalize", "verify": "verify"})
-    g.add_edge("verify", "finalize")
+    g.add_conditional_edges("verify", verify_route, {"finalize": "finalize", "retry": "retry"})
+    g.add_edge("retry", "draft")
     g.add_edge("finalize", END)
     return g.compile()
 
@@ -310,9 +393,10 @@ def run_agent(
         out = GRAPH.invoke(
             {"claim": claim, "run_id": run_id or str(uuid4()), "prompt_version": prompt_version,
              "corpus_version": "unavailable", "started_at": time.monotonic(),
-             "step_count": 0, "tool_calls": 0, "trace": [{"step": "start", "cid": correlation_id}]},
-            # Finalization remains possible after the last permitted work step.
-            {"recursion_limit": settings.agent_max_steps + 2},
+             "step_count": 0, "tool_calls": 0, "attempts": 0,
+             "trace": [{"step": "start", "cid": correlation_id}]},
+            # Room for finalization after the last work step plus draft/verify/retry rounds.
+            {"recursion_limit": settings.agent_max_steps + 4 + 3 * verifier.MAX_RETRIES},
         )
     finally:
         _INTAKE_LLM.reset(token)

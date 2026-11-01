@@ -16,6 +16,13 @@ from cli.ingest import definition_table, parse_car, parse_markdown, reference_gr
 ROOT = Path(__file__).parents[1]
 
 
+@pytest.fixture(autouse=True)
+def no_verifier_outcome_db(monkeypatch):
+    """Worker tests run without Postgres; verifier rows are covered in test_verifier.py."""
+    from worker import main as worker_main
+    monkeypatch.setattr(worker_main, "record_verifier_outcomes", lambda *_args, **_kwargs: None)
+
+
 @pytest.fixture(scope="session")
 def processed_corpus(tmp_path_factory):
     directory = tmp_path_factory.mktemp("research-corpus")
