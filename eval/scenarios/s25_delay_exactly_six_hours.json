@@ -5,7 +5,7 @@
     "pnr": "DL025A", "airline_code": "6E", "flight_number": "6E525",
     "flight_date": "2026-12-06", "origin": "BOM", "destination": "HYD",
     "block_time_minutes": 150, "disruption_type": "delay", "delay_minutes": 360,
-    "reported_at_airport": true, "contact_info_provided": true,
+    "sector": "domestic", "reported_at_airport": true, "contact_info_provided": true,
     "statement": "I checked in on time for a domestic flight with a 150-minute block time. It departed exactly six hours late. I request cash compensation for the delay."
   },
   "expected": {"route": "decline", "must_cite": ["3.4.1", "3.4.2", "3.8.1(a)"], "must_include_entitlement": "meals_and_refreshments", "must_not": "alternate-or-refund option under 3.4.2 at exactly six hours"}

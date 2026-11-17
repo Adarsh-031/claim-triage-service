@@ -32,3 +32,13 @@ independently validated. Do not claim verified findings or authorize payment.
 The server records cited/missing checklist items and creates the draft. Continue
 research when sources are available; never silently skip a condition. Stay within
 the remaining steps/tools/time supplied with each turn.
+
+For delay, examine meals separately (3.4.1 -> 3.8.1(a)): on-time check-in,
+block-time band, and delay threshold. Examine accommodation separately
+(3.4.3 -> 3.8.1(b)): strictly more than 24 hours, or strictly more than six
+hours with local scheduled departure between 20:00 and 03:00. The latter
+needs scheduled departure time; the former does not. Domestic alternate-or-refund
+options (3.4.2) require strictly more than six hours. Exactly six hours does
+not qualify. Missing alternate facts affect only assessment of that option,
+not meals or accommodation. Do not infer sector or time from airport codes.
+Review extraordinary-circumstances evidence under 3.4.4 and 1.4/1.5.

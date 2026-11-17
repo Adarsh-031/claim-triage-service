@@ -71,6 +71,7 @@ class ClaimIn(BaseModel):
     one_way_basic_fare_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     airline_fuel_charge_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     sector: Literal["domestic", "international"] | None = None
+    scheduled_departure_local: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     distance_km: int | None = Field(default=None, ge=0, le=100_000)
     ticket_cost_including_taxes_inr: float | None = Field(default=None, ge=0, le=1_000_000)
     statement: str = Field(min_length=10, max_length=4000, description="Passenger's own account")
