@@ -15,7 +15,8 @@ from ..tools.retrieval import LANGCHAIN_TOOLS, ClauseArgs, SearchArgs
 # fare inputs stay in the server-side calculator, and booking identifiers stay local.
 RESEARCH_FIELDS = frozenset({
     "airline_code", "disruption_type", "block_time_minutes", "notice_minutes_before_departure",
-    "delay_minutes", "reported_at_airport", "contact_info_provided", "stated_cause",
+    "sector", "scheduled_departure_local", "delay_minutes", "reported_at_airport",
+    "contact_info_provided", "stated_cause",
 })
 RESEARCH_ALTERNATE_FIELDS = frozenset({"offered", "accepted", "departure_delay_minutes"})
 RESEARCH_FIELD_PATHS = RESEARCH_FIELDS | {"alternate"} | {
@@ -48,8 +49,8 @@ CHECKLISTS = {
                                                      "alternate.departure_delay_minutes")),
     },
     "delay": {
-        "delay_threshold": (("3.4.1",), ("delay_minutes", "block_time_minutes", "reported_at_airport")),
-        "alternate_refund": (("3.4.2",), ("delay_minutes", "alternate.offered", "alternate.accepted")),
+        "delay_threshold": (("3.4.1", "3.8.1(a)"), ("delay_minutes", "block_time_minutes", "reported_at_airport")),
+        "alternate_refund": (("3.4.2",), ("delay_minutes",)),
         "hotel_facilities": (("3.4.3", "3.8.1(b)"), ("delay_minutes",)),
         "extraordinary_circumstances": (("3.4.4", "1.4", "1.5"), ("stated_cause",)),
     },
@@ -189,6 +190,8 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
             required = [corpus.qualified(clause, doc) for doc, clauses in COMPARISON_CLAUSES.items()
                         for clause in clauses]
         missing_chunks = [key for key in required if key not in retrieved]
+        if claim.get("disruption_type") == "delay":
+            fields = delay_fields(claim).get(item, fields)
         missing_fields = [key for key in fields if field_value(claim, key) is None]
         missing = bool(missing_chunks or missing_fields)
         results[item] = {
@@ -273,6 +276,8 @@ def make_draft(state: dict) -> dict:
     if not cited or state["claim"].get("disruption_type") not in CHECKLISTS:
         return {"route": Route.ESCALATE, "escalation_reason": EscalationReason.OUT_OF_CORPUS,
                 "summary": "No supported disruption provisions retrieved. Human review required.", "citations": cited}
+    if state["claim"].get("disruption_type") == "delay":
+        return delay_draft(state)
     computation = state.get("compensation") or {}
     # Missing legal sources can never support a substantive draft.
     missing_sources = any(item["missing_chunks"] for item in state["checklist"].values())
@@ -325,3 +330,70 @@ def make_draft(state: dict) -> dict:
         cited = citations(state, decision_items)
     return {"route": route, "summary": summary, "citations": cited, "entitlements": entitlements,
             "amount": computation["amount"] if accepted_alternate_decline else None}
+
+
+def delay_fields(claim: dict) -> dict[str, tuple[str, ...]]:
+    """Only request facts capable of changing the applicable delay outcome."""
+    delay = claim.get("delay_minutes")
+    meals = ("delay_minutes",)
+    if delay is not None and delay >= 120:
+        meals += ("reported_at_airport",)
+        if claim.get("reported_at_airport") is not False and delay < 240:
+            meals += ("block_time_minutes",)
+    options = ("delay_minutes",)
+    if delay is not None and delay > 360:
+        options += ("sector",)
+        if claim.get("sector") == "domestic":
+            options += ("alternate.offered",)
+            if field_value(claim, "alternate.offered") is True:
+                options += ("alternate.departure_delay_minutes", "alternate.accepted")
+    hotel = ("delay_minutes",)
+    if delay is not None and 360 < delay <= 1440:
+        hotel += ("scheduled_departure_local",)
+    # No stated cause means no extraordinary-circumstances defence has been raised.
+    return {"delay_threshold": meals, "alternate_refund": options, "hotel_facilities": hotel,
+            "extraordinary_circumstances": ()}
+
+
+def delay_draft(state: dict) -> dict:
+    claim = state["claim"]
+    items = state["checklist"]
+    missing = {field for item in items.values() for field in item["missing_fields"]}
+    missing_sources = any(item["missing_chunks"] for item in items.values())
+    delay = claim.get("delay_minutes")
+    entitlements = []
+    summary = "CAR 3.4 provides delay facilities and options, with no cash compensation solely for delay."
+    if not missing_sources and delay is not None:
+        cause = bool(claim.get("stated_cause"))
+        block = claim.get("block_time_minutes")
+        threshold = 120 if block is not None and block <= 150 else 180 if block is not None and block <= 300 else 240
+        if claim.get("reported_at_airport") is True and delay >= threshold and not cause:
+            entitlements.append(MEALS_ENTITLEMENT)
+            summary += " Meals and refreshments are due (CAR 3.4.1, 3.8.1(a))."
+        scheduled = claim.get("scheduled_departure_local")
+        overnight = scheduled is not None and (scheduled >= "20:00" or scheduled <= "03:00")
+        if (delay > 1440 or (delay > 360 and overnight)) and not cause:
+            entitlements.append("Hotel accommodation and airport transfers (CAR 3.4.3, 3.8.1(b))")
+            summary += " Hotel accommodation and airport transfers are due (CAR 3.4.3, 3.8.1(b))."
+        if cause:
+            missing.add("evidence of a cause beyond airline control and unavoidability despite reasonable measures")
+            summary += " Facilities require review of the claimed extraordinary circumstances (CAR 3.4.4, 1.4, 1.5)."
+        if delay <= 360:
+            summary += " The more-than-six-hour alternate-or-refund threshold is not met (CAR 3.4.2)."
+        elif claim.get("sector") == "domestic":
+            entitlements.append("Alternate flight within six hours or full ticket refund (CAR 3.4.2)")
+            if (field_value(claim, "alternate.offered") is True
+                    and field_value(claim, "alternate.accepted") is True
+                    and field_value(claim, "alternate.departure_delay_minutes") is not None
+                    and field_value(claim, "alternate.departure_delay_minutes") <= 360):
+                summary += " The accepted alternate within six hours satisfies the option (CAR 3.4.2)."
+            else:
+                summary += (" The alternate-within-six-hours or full-refund entitlement applies; "
+                            "whether it was satisfied requires option evidence (CAR 3.4.2).")
+        elif claim.get("sector") == "international":
+            summary += " The domestic alternate-or-refund provision does not apply (CAR 3.4.2)."
+    if missing:
+        summary += " Further evidence is needed only for the unresolved facilities or options: " + ", ".join(
+            sorted(missing)) + "."
+    return {"route": Route.REQUEST_EVIDENCE if missing_sources or delay is None else Route.DECLINE,
+            "summary": summary, "entitlements": entitlements, "citations": citations(state), "amount": None}

@@ -62,6 +62,8 @@ def structured_claim_facts(claim: dict[str, Any]) -> dict[str, Any]:
         "alternate_accepted": alternate.get("accepted"),
         "contact_details_given": claim.get("contact_info_provided"),
         "stated_cause": claim.get("stated_cause"),
+        "sector": claim.get("sector"),
+        "scheduled_departure_local": claim.get("scheduled_departure_local"),
     }
 
 
@@ -90,6 +92,8 @@ class IntakeFacts(BaseModel):
     alternate_accepted: bool | None = None
     contact_details_given: bool | None = None
     stated_cause: str | None = Field(default=None, max_length=300)
+    sector: Literal["domestic", "international"] | None = None
+    scheduled_departure_local: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     conflicts: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -121,7 +125,8 @@ def _messages(claim: dict[str, Any]) -> list[dict[str, str]]:
     safe_claim = {
         key: value for key, value in claim.items()
         if key in {"statement", "disruption_type", "notice_minutes_before_departure",
-                   "block_time_minutes", "contact_info_provided", "stated_cause"}
+                   "block_time_minutes", "contact_info_provided", "stated_cause",
+                   "sector", "scheduled_departure_local"}
     }
     if isinstance(claim.get("alternate"), dict):
         safe_claim["alternate"] = {key: value for key, value in claim["alternate"].items()
@@ -211,7 +216,8 @@ def extract_intake(claim: dict[str, Any], *, llm=None, timeout_s: float | None =
 def reconcile_claim(claim: dict[str, Any], facts: IntakeFacts) -> dict[str, Any]:
     """Adapt intake names to the claim contract without mutating the submitted record."""
     normalized = dict(claim)
-    for key in ("disruption_type", "notice_minutes_before_departure", "block_time_minutes", "stated_cause"):
+    for key in ("disruption_type", "notice_minutes_before_departure", "block_time_minutes", "stated_cause",
+                "sector", "scheduled_departure_local"):
         normalized[key] = getattr(facts, key)
     normalized["contact_info_provided"] = facts.contact_details_given
     if claim.get("alternate") is not None or any(

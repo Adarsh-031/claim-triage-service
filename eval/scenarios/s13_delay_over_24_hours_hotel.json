@@ -5,7 +5,7 @@
     "pnr": "DL013A", "airline_code": "6E", "flight_number": "6E313",
     "flight_date": "2026-11-24", "origin": "CCU", "destination": "DXB",
     "block_time_minutes": 165, "disruption_type": "delay", "delay_minutes": 1500,
-    "reported_at_airport": true, "contact_info_provided": true,
+    "sector": "international", "reported_at_airport": true, "contact_info_provided": true,
     "statement": "My daytime international flight was delayed by 25 hours. I checked in on time and had to stay near the airport overnight. I request cash compensation for the delay."
   },
   "expected": {"route": "decline", "must_cite": ["3.4.1", "3.4.3", "3.8.1(a)", "3.8.1(b)"], "must_include_entitlement": "meals_and_hotel_accommodation"}

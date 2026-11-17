@@ -5,7 +5,7 @@
     "pnr": "DL010A", "airline_code": "6E", "flight_number": "6E010",
     "flight_date": "2026-11-21", "origin": "MAA", "destination": "DEL",
     "block_time_minutes": 180, "disruption_type": "delay", "delay_minutes": 361,
-    "reported_at_airport": true, "contact_info_provided": true,
+    "sector": "domestic", "reported_at_airport": true, "contact_info_provided": true,
     "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 300},
     "statement": "My domestic flight was delayed by six hours and one minute. The airline offered an alternate that departed five hours after the original time, and I accepted it. I request extra cash compensation."
   },
