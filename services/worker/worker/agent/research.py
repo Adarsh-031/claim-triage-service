@@ -16,7 +16,8 @@ from ..tools.retrieval import LANGCHAIN_TOOLS, ClauseArgs, SearchArgs
 RESEARCH_FIELDS = frozenset({
     "airline_code", "disruption_type", "block_time_minutes", "notice_minutes_before_departure",
     "sector", "scheduled_departure_local", "delay_minutes", "reported_at_airport",
-    "contact_info_provided", "stated_cause",
+    "contact_info_provided", "stated_cause", "involuntary_denial",
+    "signed_voucher_agreement", "voucher_issued",
 })
 RESEARCH_ALTERNATE_FIELDS = frozenset({"offered", "accepted", "departure_delay_minutes"})
 RESEARCH_FIELD_PATHS = RESEARCH_FIELDS | {"alternate"} | {
@@ -161,6 +162,13 @@ def execute_tool(name: str, arguments: dict, claim: dict):
         # An offered/accepted alternate establishes an offer; its absence says nothing about a refund.
         if field_value(claim, "alternate.offered") is True or inputs["alternate_flight_accepted"] is True:
             inputs["alternate_or_refund_offered"] = True
+        if claim.get("disruption_type") == "denied_boarding":
+            accepted = field_value(claim, "alternate.accepted")
+            offered = field_value(claim, "alternate.offered")
+            inputs["alternate_declined"] = (not accepted if accepted is not None else
+                                            True if offered is False else None)
+            inputs["alternate_arranged"] = offered
+            inputs["alternate_departure_delay_minutes"] = field_value(claim, "alternate.departure_delay_minutes")
         result = compute_compensation(args["clause_id"], inputs)
         # Accommodates #15's structured CompensationResult when that PR lands.
         return result.to_dict() if hasattr(result, "to_dict") else result
@@ -183,12 +191,26 @@ def checklist(state: dict, *, complete: bool = False) -> dict:
         # The current claim contract has no jurisdiction field. Both airline snapshots
         # must be examined rather than guessing domestic/international from IATA codes.
         entries["airline_comparison"] = (("1.4", "1.5"), ())
+    if claim.get("disruption_type") == "denied_boarding":
+        fields = ("alternate.offered",)
+        if field_value(claim, "alternate.offered") is not False:
+            fields += ("alternate.accepted",)
+            if field_value(claim, "alternate.accepted") is not False:
+                fields += ("alternate.departure_delay_minutes",)
+        entries["alternate"] = (("3.2.2",), fields)
+        entries["payment_mode"] = (("3.7.1",), ())
+        if claim.get("voucher_issued") is True:
+            entries["payment_mode"] = (("3.7.1",), ("signed_voucher_agreement",))
+            if claim.get("airline_code") == "6E":
+                entries["voucher_terms"] = ((), ())
     results = {}
     for item, (clauses, fields) in entries.items():
         required = [corpus.qualified(c) for c in clauses]
         if item == "airline_comparison":
             required = [corpus.qualified(clause, doc) for doc, clauses in COMPARISON_CLAUSES.items()
                         for clause in clauses]
+        if item == "voucher_terms":
+            required = [corpus.qualified("10.2", doc) for doc in ("INDIGO-COC-DOM", "INDIGO-COC-INTL")]
         missing_chunks = [key for key in required if key not in retrieved]
         if claim.get("disruption_type") == "delay":
             fields = delay_fields(claim).get(item, fields)
@@ -278,6 +300,8 @@ def make_draft(state: dict) -> dict:
                 "summary": "No supported disruption provisions retrieved. Human review required.", "citations": cited}
     if state["claim"].get("disruption_type") == "delay":
         return delay_draft(state)
+    if state["claim"].get("disruption_type") == "denied_boarding":
+        return denied_boarding_draft(state)
     computation = state.get("compensation") or {}
     # Missing legal sources can never support a substantive draft.
     missing_sources = any(item["missing_chunks"] for item in state["checklist"].values())
@@ -397,3 +421,37 @@ def delay_draft(state: dict) -> dict:
             sorted(missing)) + "."
     return {"route": Route.REQUEST_EVIDENCE if missing_sources or delay is None else Route.DECLINE,
             "summary": summary, "entitlements": entitlements, "citations": citations(state), "amount": None}
+
+
+def denied_boarding_draft(state: dict) -> dict:
+    claim = state["claim"]
+    items = state["checklist"]
+    missing = {f for item in items.values() for f in item["missing_fields"]}
+    sources_missing = any(item["missing_chunks"] for item in items.values())
+    result = state.get("compensation") or {}
+    draft = {"route": Route.REQUEST_EVIDENCE, "citations": citations(state), "amount": None}
+    if not sources_missing and claim.get("voucher_issued") is True:
+        if claim.get("signed_voucher_agreement") is False and claim.get("airline_code") == "6E":
+            return {**draft, "route": Route.ESCALATE, "escalation_reason": EscalationReason.PROVISION_CONFLICT,
+                    "summary": ("Issued voucher without signed agreement: CAR 3.2.2 and 3.7.1 require review "
+                                "against IndiGo 10.2 voucher terms.")}
+        if claim.get("signed_voucher_agreement") is True and not missing:
+            return {**draft, "route": Route.DECLINE,
+                    "summary": ("Duplicate compensation declined: voucher issued with signed passenger agreement "
+                                "(CAR 3.7.1). IndiGo voucher terms are in clause 10.2.")}
+    missing.update(result.get("missing_fields", []))
+    if (not sources_missing and not missing and claim.get("involuntary_denial") is True
+            and claim.get("reported_at_airport") is True and result.get("status") == "computed"):
+        amount = result["amount"]
+        summary = ("No denied-boarding compensation: alternate departs within one hour (CAR 3.2.1, 3.2.2)."
+                   if amount == 0 else f"Denied-boarding compensation of INR {amount} is due (CAR 3.2.2). "
+                   "A claims officer must approve any payment.")
+        entitlements = []
+        if amount > 0 and (field_value(claim, "alternate.accepted") is False
+                           or field_value(claim, "alternate.offered") is False):
+            entitlements.append("Full ticket refund (CAR 3.2.2(c))")
+            summary += " Full ticket refund is also due."
+        return {**draft, "route": Route.DECLINE if amount == 0 else Route.PAY,
+                "amount": amount, "summary": summary, "entitlements": entitlements}
+    return {**draft, "summary": "Further denied-boarding eligibility evidence is required. Missing evidence: "
+            + ", ".join(sorted(missing)) + "."}

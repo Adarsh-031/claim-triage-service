@@ -104,6 +104,11 @@ def amount_matches(draft: dict, state: dict) -> dict:
     """The amount equals a fresh compute_compensation run on the trusted claim facts."""
     route, amount = draft.get("route"), draft.get("amount")
     failures = []
+    claim = state["claim"]
+    if (route == Route.DECLINE and claim.get("disruption_type") == "denied_boarding"
+            and claim.get("voucher_issued") is True and claim.get("signed_voucher_agreement") is True):
+        # This declines a duplicate payment after agreed voucher settlement, not statutory entitlement.
+        return _check("amount_matches", [] if amount is None else ["settled voucher decline must not carry an amount"])
     if route in {Route.PAY, Route.DECLINE}:
         clause = COMPENSATION_CLAUSE.get(str(state["claim"].get("disruption_type")))
         if clause is None:

@@ -63,6 +63,9 @@ class ClaimIn(BaseModel):
     notice_minutes_before_departure: int | None = Field(default=None, ge=0, le=365 * 24 * 60, validate_default=True)
     delay_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60, validate_default=True)
     reported_at_airport: bool | None = None
+    involuntary_denial: bool | None = None
+    signed_voucher_agreement: bool | None = None
+    voucher_issued: bool | None = None
     contact_info_provided: bool | None = None
     stated_cause: str | None = Field(default=None, max_length=300)
     alternate: AlternateFlight | None = None
