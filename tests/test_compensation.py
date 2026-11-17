@@ -95,12 +95,11 @@ def test_denied_boarding_declined_alternate_within_one_hour_is_zero():
     assert (result.amount, result.clause_id) == (0, "3.2.2")
 
 
-def test_denied_boarding_declined_alternate_missing_delay_needs_evidence():
+def test_denied_boarding_declined_alternate_does_not_require_delay():
     inputs = denied_boarding_inputs(alternate_declined=True)
     del inputs["alternate_departure_delay_minutes"]
     result = compute_compensation("3.2.2", inputs)
-    assert result.status == "needs_evidence"
-    assert result.missing_fields == ("alternate_departure_delay_minutes",)
+    assert (result.amount, result.clause_id) == (20_000, "3.2.2(c)")
 
 
 def test_denied_boarding_missing_passenger_choice_needs_evidence():

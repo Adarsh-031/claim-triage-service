@@ -2,12 +2,29 @@
   "id": "s16_denied_boarding_no_alternate",
   "description": "Involuntary denied boarding; passenger does not opt for an alternate flight.",
   "claim": {
-    "pnr": "DB016A", "airline_code": "6E", "flight_number": "6E616",
-    "flight_date": "2026-11-27", "origin": "BOM", "destination": "DEL",
-    "block_time_minutes": 130, "disruption_type": "denied_boarding",
-    "reported_at_airport": true, "contact_info_provided": true, "ticket_fare_inr": 8000,
-    "alternate": {"offered": true, "accepted": false},
-    "statement": "I had a confirmed booking, checked in within the required time, and was denied boarding against my will. The airline offered an alternate, but I did not opt for it. I request the refund and compensation."
+    "pnr": "DB016A",
+    "airline_code": "6E",
+    "flight_number": "6E616",
+    "flight_date": "2026-11-27",
+    "origin": "BOM",
+    "destination": "DEL",
+    "block_time_minutes": 130,
+    "disruption_type": "denied_boarding",
+    "reported_at_airport": true,
+    "contact_info_provided": true,
+    "ticket_fare_inr": 8000,
+    "alternate": {
+      "offered": true,
+      "accepted": false
+    },
+    "statement": "I had a confirmed booking, checked in within the required time, and was denied boarding against my will. The airline offered an alternate, but I did not opt for it. I request the refund and compensation.",
+    "one_way_basic_fare_inr": 7000,
+    "airline_fuel_charge_inr": 1000
   },
-  "expected": {"route": "pay_as_computed", "must_cite": ["3.2.2"]}
+  "expected": {
+    "route": "pay_as_computed",
+    "must_cite": [
+      "3.2.2"
+    ]
+  }
 }

@@ -2,12 +2,30 @@
   "id": "s15_denied_boarding_alternate_within_day",
   "description": "Involuntary denied boarding with an accepted alternate scheduled two hours later, within 24 hours.",
   "claim": {
-    "pnr": "DB015A", "airline_code": "6E", "flight_number": "6E515",
-    "flight_date": "2026-11-26", "origin": "MAA", "destination": "HYD",
-    "block_time_minutes": 90, "disruption_type": "denied_boarding",
-    "reported_at_airport": true, "contact_info_provided": true, "ticket_fare_inr": 6000,
-    "alternate": {"offered": true, "accepted": true, "departure_delay_minutes": 120},
-    "statement": "I had a confirmed booking and checked in on time, but the airline denied boarding against my will. I accepted an alternate scheduled two hours later and request the compensation due."
+    "pnr": "DB015A",
+    "airline_code": "6E",
+    "flight_number": "6E515",
+    "flight_date": "2026-11-26",
+    "origin": "MAA",
+    "destination": "HYD",
+    "block_time_minutes": 90,
+    "disruption_type": "denied_boarding",
+    "reported_at_airport": true,
+    "contact_info_provided": true,
+    "ticket_fare_inr": 6000,
+    "alternate": {
+      "offered": true,
+      "accepted": true,
+      "departure_delay_minutes": 120
+    },
+    "statement": "I had a confirmed booking and checked in on time, but the airline denied boarding against my will. I accepted an alternate scheduled two hours later and request the compensation due.",
+    "one_way_basic_fare_inr": 5000,
+    "airline_fuel_charge_inr": 1000
   },
-  "expected": {"route": "pay_as_computed", "must_cite": ["3.2.2"]}
+  "expected": {
+    "route": "pay_as_computed",
+    "must_cite": [
+      "3.2.2"
+    ]
+  }
 }

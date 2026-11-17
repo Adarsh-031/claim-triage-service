@@ -58,6 +58,45 @@ SCRIPTED_INTAKE_RESPONSES: dict[str, dict[str, Any]] = {
 }
 
 
+SCRIPTED_INTAKE_RESPONSES.update(
+{'s14_denied_boarding_alternate_within_hour': {'disruption_type': 'denied_boarding',
+                                               'block_time_minutes': 115,
+                                               'alternate_offered': True,
+                                               'alternate_accepted': True,
+                                               'involuntary_denial': True,
+                                               'signed_voucher_agreement': None,
+                                               'voucher_issued': None},
+ 's15_denied_boarding_alternate_within_day': {'disruption_type': 'denied_boarding',
+                                              'block_time_minutes': 90,
+                                              'alternate_offered': True,
+                                              'alternate_accepted': True,
+                                              'involuntary_denial': True,
+                                              'signed_voucher_agreement': None,
+                                              'voucher_issued': None},
+ 's16_denied_boarding_no_alternate': {'disruption_type': 'denied_boarding',
+                                      'block_time_minutes': 130,
+                                      'alternate_offered': True,
+                                      'alternate_accepted': False,
+                                      'involuntary_denial': True,
+                                      'signed_voucher_agreement': None,
+                                      'voucher_issued': None},
+ 's17_denied_boarding_signed_voucher': {'disruption_type': 'denied_boarding',
+                                        'block_time_minutes': 45,
+                                        'alternate_offered': True,
+                                        'alternate_accepted': True,
+                                        'involuntary_denial': True,
+                                        'signed_voucher_agreement': True,
+                                        'voucher_issued': True},
+ 's18_denied_boarding_unsigned_voucher_conflict': {'disruption_type': 'denied_boarding',
+                                                   'block_time_minutes': 170,
+                                                   'alternate_offered': True,
+                                                   'alternate_accepted': True,
+                                                   'involuntary_denial': True,
+                                                   'signed_voucher_agreement': False,
+                                                   'voucher_issued': True}}
+)
+
+
 def _intake_stub_content(scenario_id: str | None = None) -> str | None:
     # Script selection is available only to local test callers via an HTTP header.
     # Ordinary claim JSON cannot select a canned response or steer production behavior.
@@ -90,9 +129,17 @@ def research_reply(messages: list[dict]) -> dict:
            for doc in ("INDIGO-COC-DOM", "INDIGO-COC-INTL")],
         [("compute_compensation", {"clause_id": "3.3.2"})],
     ]
+    if claim.get("disruption_type") == "denied_boarding":
+        phases = [
+            [("get_clause", {"clause_id": c}) for c in ("3.2.1", "3.2.2", "3.7.1", "1.4", "1.5")]
+            + [("get_clause", {"clause_id": c, "doc_id": d})
+               for d in ("INDIGO-COC-DOM", "INDIGO-COC-INTL") for c in ("1.1", "14.2", "10.2")],
+            [("compute_compensation", {"clause_id": "3.2.2"})],
+        ]
     count = 0
     for phase in phases:
-        if len(completed) == count and (claim.get("disruption_type") == "cancellation" or count == 0):
+        if len(completed) == count and (
+                claim.get("disruption_type") in {"cancellation", "denied_boarding"} or count == 0):
             return {"role": "assistant", "content": None, "tool_calls": [
                 {"id": f"research-{count + i}", "type": "function",
                  "function": {"name": name, "arguments": json.dumps(args)}}

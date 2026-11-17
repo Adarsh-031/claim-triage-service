@@ -199,27 +199,15 @@ def _denied_boarding(inputs: dict[str, Any]) -> CompensationResult:
     alternate = inputs.get("alternate_arranged")
     delay = inputs.get("alternate_departure_delay_minutes")
     if declined:
-        if alternate is None:
-            return _needs_evidence(clause, "alternate_arranged")
-        alternate = _boolean(alternate, "alternate_arranged")
-        if alternate:
-            if delay is None:
-                return _needs_evidence(clause, "alternate_departure_delay_minutes")
+        # Apply the one-hour exception only when an arranged departure is established.
+        # Opting out does not itself require a hypothetical alternate departure time.
+        if alternate is True and delay is not None:
             delay = _integer(delay, "alternate_departure_delay_minutes")
             if delay <= 60:
-                return _zero(
-                    clause,
-                    "alternate arranged to depart within one hour, 3.2.2",
-                    {
-                        "alternate_arranged": True,
-                        "alternate_declined": True,
-                        "alternate_departure_delay_minutes": delay,
-                    },
-                )
+                return _zero(clause, "alternate arranged to depart within one hour, 3.2.2",
+                             {"alternate_arranged": True, "alternate_declined": True,
+                              "alternate_departure_delay_minutes": delay})
         used: dict[str, Any] = {"alternate_declined": True}
-        used["alternate_arranged"] = alternate
-        if delay is not None:
-            used["alternate_departure_delay_minutes"] = delay
         subclause, multiplier, cap = "3.2.2(c)", Decimal(4), Decimal(20000)
         formula = "min(400% × (booked one-way basic fare + airline fuel charge), INR 20,000)"
     else:
