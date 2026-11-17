@@ -28,6 +28,7 @@
   },
   "s19_involuntary_domestic_downgrade": {
     "disruption_type": "downgrade",
+    "involuntary_downgrade": true, "sector": "domestic",
     "notice_minutes_before_departure": null,
     "block_time_minutes": 165,
     "alternate_offered": null,

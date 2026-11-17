@@ -62,9 +62,21 @@ def test_computed_payment_scenarios_include_a_fare_input():
         claim = scenario["claim"]
         if (
             scenario["expected"]["route"] == "pay_as_computed"
-            and claim["disruption_type"] in {"cancellation", "denied_boarding", "downgrade"}
+            and claim["disruption_type"] in {"cancellation", "denied_boarding"}
         ):
             assert claim.get("ticket_fare_inr") is not None, path.name
+
+
+def test_downgrade_payment_scenarios_include_explicit_eligibility_and_cost():
+    for path in SCENARIO_FILES:
+        scenario = load_scenario(path)
+        claim = scenario["claim"]
+        if scenario["expected"]["route"] == "pay_as_computed" and claim["disruption_type"] == "downgrade":
+            assert claim.get("involuntary_downgrade") is True, path.name
+            assert claim.get("sector") in {"domestic", "international"}, path.name
+            assert claim.get("ticket_cost_including_taxes_inr") is not None, path.name
+            if claim["sector"] == "international":
+                assert claim.get("distance_km") is not None, path.name
 
 
 @pytest.mark.parametrize("scenario_path", SCENARIO_FILES, ids=lambda path: path.stem)

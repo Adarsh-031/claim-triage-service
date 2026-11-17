@@ -41,7 +41,8 @@ SCRIPTED_INTAKE_RESPONSES: dict[str, dict[str, Any]] = {
         "contact_details_given": True, "stated_cause": None,
     },
     "s19_involuntary_domestic_downgrade": {
-        "disruption_type": "downgrade", "notice_minutes_before_departure": None,
+        "disruption_type": "downgrade",
+        "involuntary_downgrade": True, "sector": "domestic", "notice_minutes_before_departure": None,
         "block_time_minutes": 165, "alternate_offered": None, "alternate_accepted": None,
         "contact_details_given": True, "stated_cause": None,
     },
@@ -136,10 +137,17 @@ def research_reply(messages: list[dict]) -> dict:
                for d in ("INDIGO-COC-DOM", "INDIGO-COC-INTL") for c in ("1.1", "14.2", "10.2")],
             [("compute_compensation", {"clause_id": "3.2.2"})],
         ]
+    if claim.get("disruption_type") == "downgrade":
+        phases = [
+            [("get_clause", {"clause_id": c}) for c in ("3.5.1", "1.4", "1.5")]
+            + [("get_clause", {"clause_id": c, "doc_id": d})
+               for d in ("INDIGO-COC-DOM", "INDIGO-COC-INTL") for c in ("1.1", "14.2")],
+            [("compute_compensation", {"clause_id": "3.5.1"})],
+        ]
     count = 0
     for phase in phases:
         if len(completed) == count and (
-                claim.get("disruption_type") in {"cancellation", "denied_boarding"} or count == 0):
+                claim.get("disruption_type") in {"cancellation", "denied_boarding", "downgrade"} or count == 0):
             return {"role": "assistant", "content": None, "tool_calls": [
                 {"id": f"research-{count + i}", "type": "function",
                  "function": {"name": name, "arguments": json.dumps(args)}}
