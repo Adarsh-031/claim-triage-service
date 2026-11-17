@@ -61,6 +61,7 @@ def structured_claim_facts(claim: dict[str, Any]) -> dict[str, Any]:
         "alternate_offered": alternate.get("offered"),
         "alternate_accepted": alternate.get("accepted"),
         "involuntary_denial": claim.get("involuntary_denial"),
+        "involuntary_downgrade": claim.get("involuntary_downgrade"),
         "signed_voucher_agreement": claim.get("signed_voucher_agreement"),
         "voucher_issued": claim.get("voucher_issued"),
         "contact_details_given": claim.get("contact_info_provided"),
@@ -94,6 +95,7 @@ class IntakeFacts(BaseModel):
     alternate_offered: bool | None = None
     alternate_accepted: bool | None = None
     involuntary_denial: bool | None = None
+    involuntary_downgrade: bool | None = None
     signed_voucher_agreement: bool | None = None
     voucher_issued: bool | None = None
     contact_details_given: bool | None = None
@@ -132,7 +134,7 @@ def _messages(claim: dict[str, Any]) -> list[dict[str, str]]:
         key: value for key, value in claim.items()
         if key in {"statement", "disruption_type", "notice_minutes_before_departure",
                    "block_time_minutes", "contact_info_provided", "stated_cause",
-                   "sector", "scheduled_departure_local", "involuntary_denial",
+                   "sector", "scheduled_departure_local", "involuntary_denial", "involuntary_downgrade",
                    "signed_voucher_agreement", "voucher_issued"}
     }
     if isinstance(claim.get("alternate"), dict):
@@ -224,7 +226,7 @@ def reconcile_claim(claim: dict[str, Any], facts: IntakeFacts) -> dict[str, Any]
     """Adapt intake names to the claim contract without mutating the submitted record."""
     normalized = dict(claim)
     for key in ("disruption_type", "notice_minutes_before_departure", "block_time_minutes", "stated_cause",
-                "sector", "scheduled_departure_local", "involuntary_denial",
+                "sector", "scheduled_departure_local", "involuntary_denial", "involuntary_downgrade",
                 "signed_voucher_agreement", "voucher_issued"):
         normalized[key] = getattr(facts, key)
     normalized["contact_info_provided"] = facts.contact_details_given

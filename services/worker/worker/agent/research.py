@@ -16,7 +16,7 @@ from ..tools.retrieval import LANGCHAIN_TOOLS, ClauseArgs, SearchArgs
 RESEARCH_FIELDS = frozenset({
     "airline_code", "disruption_type", "block_time_minutes", "notice_minutes_before_departure",
     "sector", "scheduled_departure_local", "delay_minutes", "reported_at_airport",
-    "contact_info_provided", "stated_cause", "involuntary_denial",
+    "contact_info_provided", "stated_cause", "involuntary_denial", "involuntary_downgrade",
     "signed_voucher_agreement", "voucher_issued",
 })
 RESEARCH_ALTERNATE_FIELDS = frozenset({"offered", "accepted", "departure_delay_minutes"})
@@ -302,6 +302,8 @@ def make_draft(state: dict) -> dict:
         return delay_draft(state)
     if state["claim"].get("disruption_type") == "denied_boarding":
         return denied_boarding_draft(state)
+    if state["claim"].get("disruption_type") == "downgrade":
+        return downgrade_draft(state)
     computation = state.get("compensation") or {}
     # Missing legal sources can never support a substantive draft.
     missing_sources = any(item["missing_chunks"] for item in state["checklist"].values())
@@ -455,3 +457,22 @@ def denied_boarding_draft(state: dict) -> dict:
                 "amount": amount, "summary": summary, "entitlements": entitlements}
     return {**draft, "summary": "Further denied-boarding eligibility evidence is required. Missing evidence: "
             + ", ".join(sorted(missing)) + "."}
+
+
+def downgrade_draft(state: dict) -> dict:
+    claim = state["claim"]
+    result = state.get("compensation") or {}
+    missing = {f for item in state["checklist"].values() for f in item["missing_fields"]}
+    missing.update(result.get("missing_fields", []))
+    missing_sources = any(item["missing_chunks"] for item in state["checklist"].values())
+    draft = {"route": Route.REQUEST_EVIDENCE, "citations": citations(state), "amount": None}
+    if (not missing_sources and not missing and claim.get("involuntary_downgrade") is True
+            and result.get("status") == "computed" and result.get("amount", 0) > 0):
+        entitlement = f"{claim['sector']} involuntary downgrade reimbursement"
+        return {**draft, "route": Route.PAY, "amount": result["amount"], "entitlements": [entitlement],
+                "summary": (f"{entitlement.capitalize()} of INR {result['amount']} is due (CAR 3.5.1). "
+                            "A claims officer must approve any payment.")}
+    summary = "Further downgrade eligibility evidence or review is required."
+    if missing:
+        summary += " Missing evidence: " + ", ".join(sorted(missing)) + "."
+    return {**draft, "summary": summary}
