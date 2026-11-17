@@ -32,8 +32,8 @@ See [the ingestion guide](docs/ingestion.md) for artifact formats, reference res
 
 For production-like troubleshooting, see the [operational runbooks](docs/runbooks.md) and
 [incident log](docs/incident-log.md). The runbooks include Chroma repair/retrieval checks, Grafana dashboards, and correlated
-API/worker traces. The separate verifier remains tracked in
-[issue #6](https://github.com/Adarsh-031/claim-triage-service/issues/6).
+API/worker traces. The [grounding verifier guide](docs/verifier.md) covers verification
+and the separate verifier-worker.
 
 Run the stack:
 
@@ -68,8 +68,9 @@ and `ingest` should show `Exited (0)`. The readiness request should return HTTP 
 Submit a claim:
 
 ```bash
-curl -s -X POST localhost:8000/v1/claims -H 'content-type: application/json' \
-  -d @eval/scenarios/s01_demo_cancellation_alternate_taken.json | jq
+jq '.claim' eval/scenarios/s01_demo_cancellation_alternate_taken.json | \
+  curl -s -X POST localhost:8000/v1/claims -H 'content-type: application/json' \
+    --data-binary @- | jq
 curl -s localhost:8000/v1/runs/<run_id> | jq
 ```
 
@@ -123,8 +124,8 @@ On the current corpus: hybrid 13/14, BM25 8/14, vector 6/14.
 |---|---|---|
 | P0 | Compose, API, queue, worker, run polling | scaffolded |
 | P0 | Clause chunks + reference/definition exports | implemented with idempotent MiniLM/Chroma indexing; agent retrieval is hybrid Chroma + BM25 |
-| P0 | Bounded research tool loop, cited demo case 4.1 | processed corpus, checklists and conflict escalation implemented; grounding verifier pending |
-| P1 | Verifier, escalation, observability, eval, circuit breaker, web client | partial |
+| P0 | Bounded research tool loop, cited demo case 4.1 | processed corpus, checklists, conflict escalation and grounding verifier implemented |
+| P1 | Verifier, escalation, observability, eval, circuit breaker, web client | separate verifier-worker implemented; remaining items partial |
 | P2 | Dashboards, Locust/scaling study, caching study, prompt A/B | service/agent dashboards provisioned; scaling/cache/prompt studies pending |
 
 ## Configuration
