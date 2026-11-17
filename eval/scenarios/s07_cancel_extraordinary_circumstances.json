@@ -1,6 +1,6 @@
 {
   "id": "s07_cancel_extraordinary_circumstances",
-  "description": "Cancellation attributed to an airport-wide air traffic control closure beyond the airline's control.",
+  "description": "An ATC closure is stated, but evidence of unavoidability despite reasonable measures is still required.",
   "claim": {
     "pnr": "CA007A", "airline_code": "6E", "flight_number": "6E707",
     "flight_date": "2026-11-18", "origin": "BOM", "destination": "GOI",
@@ -9,5 +9,5 @@
     "contact_info_provided": true, "stated_cause": "airport-wide ATC closure",
     "statement": "The airport authority notice says an air traffic control closure caused the cancellation. The airline shared the notice with passengers. I request cancellation compensation."
   },
-  "expected": {"route": "decline", "must_cite": ["1.5", "3.3.4"], "must_not": "cancellation compensation despite a substantiated extraordinary circumstance"}
+  "expected": {"route": "request_further_evidence", "must_cite": ["1.5", "3.3.4"], "must_not": "cancellation compensation despite a substantiated extraordinary circumstance"}
 }

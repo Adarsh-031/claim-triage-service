@@ -68,6 +68,8 @@ def test_s01_research_preserves_real_citations_and_is_verified():
     assert str(result.run_id) == run_id
     # Research is complete and the separate grounding verifier passed the draft.
     assert result.route is Route.DECLINE and result.escalation_reason is None
+    assert result.amount == 0
+    assert any("Meals and refreshments" in entitlement for entitlement in result.entitlements)
     draft = next(t for t in trace if t["step"] == "draft")
     assert draft["route"] == Route.DECLINE
     assert draft["amount"] == 0 and draft["compensation"]["amount"] == 0
@@ -564,3 +566,21 @@ def test_intake_provider_outage_escalates_before_research():
     assert result.escalation_reason is EscalationReason.PROVIDER_DEGRADED
     assert result.amount is None
     assert not any(item["step"] == "research" for item in trace)
+
+
+@pytest.mark.parametrize("scenario_id", [
+    "s03_cancel_notice_under_two_weeks", "s04_cancel_notice_at_least_two_weeks",
+    "s07_cancel_extraordinary_circumstances",
+])
+def test_cancellation_evidence_matches_supplied_facts(scenario_id):
+    scenario = json.loads((SCENARIO_DIR / f"{scenario_id}.json").read_text())
+    result, trace = graph.run_agent(scenario["claim"])
+    assert result.route.value == scenario["expected"]["route"]
+    assert set(scenario["expected"]["must_cite"]) <= {c.clause_id for c in result.citations}
+    draft = next(t for t in trace if t["step"] == "draft")
+    if scenario_id.startswith(("s03", "s04")):
+        assert result.amount == 0
+        assert draft["compensation"]["inputs_used"]["alternate_or_refund_offered"] is True
+        assert "Missing evidence" not in result.summary
+    else:
+        assert "unavoidability despite reasonable measures" in result.summary

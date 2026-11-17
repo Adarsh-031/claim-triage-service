@@ -292,3 +292,13 @@ def test_private_claim_tool_errors_never_disclose_values_on_next_provider_turn(m
                      "alternate": {"pnr": "PRIVATE_SENTINEL"}, "disruption_type": "cancellation"})
     assert len(requests) == 2
     assert all("PRIVATE_SENTINEL" not in request for request in requests)
+
+
+def test_unknown_refund_offer_is_not_inferred_from_no_alternate():
+    from worker.agent.research import execute_tool
+
+    claim = {"notice_minutes_before_departure": 14400,
+             "alternate": {"offered": False, "accepted": False}}
+    result = execute_tool("compute_compensation", {"clause_id": "3.3.2"}, claim)
+    assert result["status"] == "needs_evidence"
+    assert result["missing_fields"] == ["alternate_or_refund_offered"]
