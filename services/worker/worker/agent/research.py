@@ -157,6 +157,9 @@ def execute_tool(name: str, arguments: dict, claim: dict):
         # Only fields from the actual run are usable; never accept model-supplied inputs.
         inputs = {key: value for key, value in claim.items() if key != "statement"}
         inputs["alternate_flight_accepted"] = field_value(claim, "alternate.accepted")
+        # An offered/accepted alternate establishes an offer; its absence says nothing about a refund.
+        if field_value(claim, "alternate.offered") is True or inputs["alternate_flight_accepted"] is True:
+            inputs["alternate_or_refund_offered"] = True
         result = compute_compensation(args["clause_id"], inputs)
         # Accommodates #15's structured CompensationResult when that PR lands.
         return result.to_dict() if hasattr(result, "to_dict") else result
@@ -253,7 +256,6 @@ PAY_CANCELLATION_ITEMS = ("notice_period", "alternate_offered_accepted", "contac
 DECLINE_ACCEPTED_ALTERNATE_ITEMS = ("notice_period", "alternate_offered_accepted")
 
 MEALS_ENTITLEMENT = "Meals and refreshments in relation to waiting time (CAR 3.8.1(a))"
-DECLINE_IRRELEVANT_FIELDS = frozenset({"stated_cause"})
 
 
 def make_draft(state: dict) -> dict:
@@ -301,9 +303,20 @@ def make_draft(state: dict) -> dict:
         decision_items.append("meals_facilities")
     missing_fields = {f for item in state["checklist"].values() for f in item["missing_fields"]} | set(
         computation.get("missing_fields", []))
+    if state["claim"].get("disruption_type") == "cancellation" and not accepted:
+        # Waiting time only changes meals eligibility after an alternate is accepted.
+        missing_fields.discard("alternate.departure_delay_minutes")
     if accepted_alternate_decline:
         # The cause only matters for compensation, which an accepted alternate already rules out.
-        missing_fields -= DECLINE_IRRELEVANT_FIELDS
+        missing_fields.clear()
+        if state["claim"].get("reported_at_airport") is None:
+            missing_fields.add("reported_at_airport")
+        elif state["claim"].get("reported_at_airport") is True and field_value(
+                state["claim"], "alternate.departure_delay_minutes") is None:
+            missing_fields.add("alternate.departure_delay_minutes")
+    if (not accepted_alternate_decline and state["claim"].get("disruption_type") == "cancellation"
+            and state["claim"].get("stated_cause")):
+        missing_fields.add("evidence of a cause beyond airline control and unavoidability despite reasonable measures")
     missing_fields = sorted(missing_fields)
     if missing_fields:
         summary += " Missing evidence: " + ", ".join(missing_fields) + "."
